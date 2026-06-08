@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-from openpyxl.styles import PatternFill, Font
+from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.utils import get_column_letter
 import hashlib
 
 # ==========================================
@@ -169,12 +170,7 @@ def transformar_hierarquico(df):
 
 def estilizar_relatorio(row):
     """
-    Taxonomia de Cores:
-    - Azul Claro: Estrutura.
-    - Amarelo: Fraude Métrica.
-    - Vermelho: Sobrepreço Financeiro.
-    - Laranja: Inexequibilidade.
-    - Roxo: Aumento de Quantitativo.
+    Taxonomia de Cores para a Tela (Streamlit)
     """
     if row['Und_Base'] == '---':
         return ['background-color: #dbeafe; font-weight: bold; color: #1e3a8a;'] * len(row)
@@ -192,18 +188,13 @@ def estilizar_relatorio(row):
         
         try:
             v = float(val)
-            # 1. Roxo: Variação de Quantidade
             if col == 'Delta_Qtd' and v > 0:
                 estilos[i] = 'background-color: #e9d5ff; color: #6b21a8; font-weight: bold;'
-            
-            # 2. Vermelho: Sobrepreço Financeiro
             elif col in ['Delta_Preco', 'Delta_Total'] and v > 0:
                 estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
-            
             elif col in ['Var_Preco_%', 'Var_Total_%']:
                 if v > 0:
                     estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
-                # 3. Laranja: Inexequibilidade
                 elif v < st.session_state.get('limiar_desconto', -0.25):
                     estilos[i] = 'background-color: #fdba74; color: #7c2d12; font-weight: bold;'
         except Exception:
@@ -211,76 +202,173 @@ def estilizar_relatorio(row):
             
     return estilos
 
-def gerar_excel_bytes(styler_excel, styler_erros, df_base, df_prop):
-    """Gera Excel injetando Legend, Auto-Fit e formatação matemática NATIVA."""
+# ==========================================
+# 2. MOTOR EXPORTADOR MULTI-ABA (OPENPYXL)
+# ==========================================
+
+def gerar_excel_bytes(df_kpi, df_matriz, df_inconformidades, df_nao_encontrados, df_parsing, df_db_base, df_db_prop):
+    """
+    Gera dinamicamente todas as abas do Laudo Técnico em conformidade com as regras de negócios.
+    Aplica formatação nativa (Moedas, percentuais, floats), autoajuste de colunas e paleta executiva.
+    """
     output = io.BytesIO()
+    
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         
-        styler_excel.to_excel(writer, index=False, sheet_name='1. Matriz Completa', startrow=8)
-        if styler_erros is not None:
-            styler_erros.to_excel(writer, index=False, sheet_name='2. Inconformidades', startrow=8)
+        # 1. ABA DASHBOARD KPI
+        df_kpi.to_excel(writer, index=False, sheet_name='📊 Dashboard KPI', startrow=1)
+        
+        # 2. ABA MATRIZ COMPLETA
+        df_matriz.to_excel(writer, index=False, sheet_name='📋 Matriz Completa', startrow=8)
+        
+        # 3. ABA INCONFORMIDADES
+        if not df_inconformidades.empty:
+            df_inconformidades.to_excel(writer, index=False, sheet_name='🚨 Inconformidades', startrow=8)
+        else:
+            # Caso não haja erros, criar aba vazia com mensagem de sucesso
+            ws_inc = writer.book.create_sheet(title='🚨 Inconformidades')
+            ws_inc['A1'] = "Parabéns! Nenhuma inconformidade paramétrica detectada."
+            ws_inc['A1'].font = Font(bold=True, size=12)
             
+        # 4. ABA ITENS NÃO ENCONTRADOS
+        if not df_nao_encontrados.empty:
+            df_nao_encontrados.to_excel(writer, index=False, sheet_name='📍 Itens Não Encontrados', startrow=1)
+        else:
+            ws_ne = writer.book.create_sheet(title='📍 Itens Não Encontrados')
+            ws_ne['A1'] = "100% de correspondência! Todos os itens foram validados na base."
+            ws_ne['A1'].font = Font(bold=True, size=12)
+            
+        # 5. ABA LOG DE PARSING
+        if not df_parsing.empty:
+            df_parsing.to_excel(writer, index=False, sheet_name='📝 Log de Erros de Parsing', startrow=1)
+        else:
+            ws_log = writer.book.create_sheet(title='📝 Log de Erros de Parsing')
+            ws_log['A1'] = "Limpo! Zero erros na leitura estrutural dos arquivos."
+            ws_log['A1'].font = Font(bold=True, size=12)
+            
+        # 6. ABAS DE BANCO DE DADOS BRUTOS
+        df_db_base.to_excel(writer, index=False, sheet_name='🗄️ DB Base', startrow=1)
+        df_db_prop.to_excel(writer, index=False, sheet_name='🗄️ DB Proposta', startrow=1)
+        
+        # FUNÇÃO PARA INJETAR A LEGENDA CORPORATIVA
         def injetar_legenda(ws):
             legendas = [
-                ('A1', 'FCA5A5', '🟥 VERMELHO: Sobrepreço (Preço Unit. ou Total superior à base).'),
-                ('A2', 'E9D5FF', '🟪 ROXO: Quantidade Adulterada (Quantitativo majorado na proposta).'),
-                ('A3', 'FDBA74', '🟧 LARANJA: Inexequibilidade (Desconto excessivo, conforme diligências).'),
-                ('A4', 'FEF08A', '🟨 AMARELO: Fraude Métrica (Unidades de Medida incompatíveis).'),
-                ('A7', 'DBEAFE', '🟦 AZUL CLARO: Estrutura (Cabeçalho da Composição Pai).')
+                ('A1', 'FCA5A5', '🟥 VERMELHO: Sobrepreço (Preço Unit. ou Total superior à base de referência).'),
+                ('A2', 'E9D5FF', '🟪 ROXO: Quantidade Adulterada (Quantitativo majorado na proposta em relação à base).'),
+                ('A3', 'FDBA74', '🟧 LARANJA: Inexequibilidade (Desconto excessivo fora dos limites paramétricos).'),
+                ('A4', 'FEF08A', '🟨 AMARELO: Fraude Métrica (Unidades de Medida incompatíveis entre planilhas).'),
+                ('A7', 'DBEAFE', '🟦 AZUL CLARO: Estrutura (Linha de Cabeçalho da Composição Analítica Pai).')
             ]
-            
             for celula, cor, texto in legendas:
                 ws[celula] = texto
                 ws[celula].fill = PatternFill(start_color=cor, end_color=cor, fill_type='solid')
-                ws[celula].font = Font(bold=True)
-                
-        # Varredura Mestra para injetar formatação nativa (Moeda, % e Decimais) e ajustar largura
-        for sheetname in writer.sheets:
-            ws = writer.sheets[sheetname]
+                ws[celula].font = Font(bold=True, size=9)
+
+        # VARREDURA MESTRA DE ESTILIZAÇÃO E AUTO-FIT NATIVO
+        wb = writer.book
+        for name in wb.sheetnames:
+            ws = wb[name]
             
-            if 'Matriz' in sheetname or 'Inconformidades' in sheetname:
+            # Definir em qual linha começa o cabeçalho real da tabela para aplicar estilos
+            if name in ['📋 Matriz Completa', '🚨 Inconformidades']:
                 injetar_legenda(ws)
-                linha_cabecalho = 9 
+                linha_cabecalho = 9
+                
+                # Estilização condicional de células baseada em regras de engenharia de custos
+                for row_idx in range(linha_cabecalho + 1, ws.max_row + 1):
+                    und_base_val = str(ws.cell(row=row_idx, column=3).value).strip()
+                    
+                    # Se for Composição Pai (Marcar com Azul)
+                    if und_base_val == '---':
+                        azul_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
+                        for c_idx in range(1, ws.max_column + 1):
+                            cell = ws.cell(row=row_idx, column=c_idx)
+                            cell.fill = azul_fill
+                            cell.font = Font(bold=True, color='1E3A8A')
+                        continue
+                    
+                    # Verificação de Desvios para Insumos Filhos
+                    try:
+                        und_prop_val = str(ws.cell(row=row_idx, column=4).value).strip()
+                        delta_qtd = float(ws.cell(row=row_idx, column=7).value or 0)
+                        delta_preco = float(ws.cell(row=row_idx, column=10).value or 0)
+                        var_preco_p = float(ws.cell(row=row_idx, column=11).value or 0)
+                        
+                        # Amarelo: Fraude Métrica
+                        if und_base_val != und_prop_val and und_base_val != 'None':
+                            ws.cell(row=row_idx, column=3).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type='solid')
+                            ws.cell(row=row_idx, column=4).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type='solid')
+                        
+                        # Roxo: Quantidade Majorada
+                        if delta_qtd > 0:
+                            ws.cell(row=row_idx, column=7).fill = PatternFill(start_color='E9D5FF', end_color='E9D5FF', fill_type='solid')
+                            
+                        # Vermelho: Sobrepreço
+                        if delta_preco > 0:
+                            ws.cell(row=row_idx, column=10).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type='solid')
+                        if var_preco_p > 0:
+                            ws.cell(row=row_idx, column=11).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type='solid')
+                            
+                        # Laranja: Inexequível
+                        if var_preco_p < st.session_state.get('limiar_desconto', -0.25):
+                            ws.cell(row=row_idx, column=11).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type='solid')
+                    except Exception:
+                        pass
             else:
                 linha_cabecalho = 1
-                
-            # Mapeia as colunas dinamicamente
+            
+            # Mapeamento dinâmico de colunas para formatação de dados nativos do Excel
             formatos_coluna = {}
             for col_idx in range(1, ws.max_column + 1):
                 nome_col = str(ws.cell(row=linha_cabecalho, column=col_idx).value)
-                if 'Preco' in nome_col or 'Total' in nome_col:
-                    formatos_coluna[col_idx] = '0.00%' if '%' in nome_col else '"R$" #,##0.00'
-                elif 'Qtd' in nome_col:
+                if any(k in nome_col for k in ['Preco', 'Preço', 'Total', 'Valor', 'Delta_Preco', 'Delta_Total', 'Financeiro']):
+                    if '%' in nome_col or 'Var_' in nome_col:
+                        formatos_coluna[col_idx] = '0.00%'
+                    else:
+                        formatos_coluna[col_idx] = '"R$" #,##0.00'
+                elif any(k in nome_col for k in ['Qtd', 'Quantidade', 'Quantitativo', 'Delta_Qtd']):
                     formatos_coluna[col_idx] = '#,##0.0000'
-
-            # Aplica os formatos nas células e calcula o Auto-Fit
+                elif '%' in nome_col or 'Taxa' in nome_col or 'Var_' in nome_col:
+                    formatos_coluna[col_idx] = '0.00%'
+            
+            # Aplicação dos formatos numéricos e cálculo preciso do Auto-Fit das Colunas
             for col in ws.columns:
                 max_length = 0
-                col_letter = col[0].column_letter
+                col_letter = get_column_letter(col[0].column)
                 col_idx = col[0].column
                 
+                # Formata o cabeçalho com design executivo escuro
+                header_cell = ws.cell(row=linha_cabecalho, column=col_idx)
+                header_cell.font = Font(bold=True, color='FFFFFF')
+                header_cell.fill = PatternFill(start_color='1E293B', end_color='1E293B', fill_type='solid') # Slate 800
+                header_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+                
                 for cell in col:
-                    # Aplica a formatação nativa do Excel para os números
-                    if col_idx in formatos_coluna and cell.row > linha_cabecalho and isinstance(cell.value, (int, float)):
-                        cell.number_format = formatos_coluna[col_idx]
-                    
-                    # Calcula o Auto-Fit
+                    if cell.row > linha_cabecalho:
+                        # Forçar a injeção do tipo numérico correto para o Excel não reclamar de "número armazenado como texto"
+                        if col_idx in formatos_coluna and isinstance(cell.value, (int, float, np.number)):
+                            cell.number_format = formatos_coluna[col_idx]
+                        
+                    # Bloco de cálculo do tamanho visível do texto
                     try:
-                        if cell.value:
-                            texto_visivel = str(cell.value)
+                        if cell.value is not None:
+                            val_str = str(cell.value)
                             if col_idx in formatos_coluna and isinstance(cell.value, (int, float)):
-                                texto_visivel = f"R$ {cell.value:.2f}"
-                            max_length = max(max_length, len(texto_visivel))
+                                if '%' in formatos_coluna[col_idx]:
+                                    val_str = f"{cell.value * 100:.2f}%"
+                                else:
+                                    val_str = f"R$ {cell.value:,.2f}"
+                            max_length = max(max_length, len(val_str))
                     except Exception:
                         pass
                 
-                largura_ajustada = min(max_length + 2, 95)
-                ws.column_dimensions[col_letter].width = largura_ajustada
-
+                # Limitador de segurança para largura
+                ws.column_dimensions[col_letter].width = min(max(max_length + 3, 11), 70)
+                
     return output.getvalue()
 
 # ==========================================
-# 2. INTERFACE DO SISTEMA
+# 3. INTERFACE DO SISTEMA
 # ==========================================
 
 # Inicializar session_state para parâmetros
@@ -309,16 +397,16 @@ with st.sidebar:
     st.divider()
     st.subheader("📌 Legenda de Auditoria")
     st.markdown("""
-    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fca5a5; color: #7f1d1d;">
+    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fca5a5; color: #7f1d1d; font-family: sans-serif; font-size:13px;">
         <b>🟥 Vermelho (Sobrepreço)</b><br>Preço unitário ou total superior à base.
     </div>
-    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #e9d5ff; color: #6b21a8;">
+    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #e9d5ff; color: #6b21a8; font-family: sans-serif; font-size:13px;">
         <b>🟪 Roxo (Quantidade Adulterada)</b><br>Quantidade do insumo majorada.
     </div>
-    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fdba74; color: #7c2d12;">
+    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fdba74; color: #7c2d12; font-family: sans-serif; font-size:13px;">
         <b>🟧 Laranja (Inexequibilidade)</b><br>Desconto excessivo (ajustável acima).
     </div>
-    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fef08a; color: #713f12;">
+    <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fef08a; color: #713f12; font-family: sans-serif; font-size:13px;">
         <b>🟨 Amarelo (Fraude Métrica)</b><br>Unidades de Medida incompatíveis.
     </div>
     """, unsafe_allow_html=True)
@@ -425,43 +513,97 @@ if arquivo_base and arquivo_proposta:
                 'Var_Total_%': '{:.2%}'
             }
             
-            # Separação crucial de responsabilidades:
-            # 1. Styler para a UI (números formatados como strings)
+            # Styler para a UI do Streamlit
             styler_ui_completo = df_visual_completo.style.format(formato_tela, na_rep="").apply(estilizar_relatorio, axis=1)
             styler_ui_erros = df_visual_erros.style.format(formato_tela, na_rep="").apply(estilizar_relatorio, axis=1) if not df_visual_erros.empty else None
             
-            # 2. Styler para o Excel (números vivos, apenas colores)
-            styler_excel_completo = df_visual_completo.style.apply(estilizar_relatorio, axis=1)
-            styler_excel_erros = df_visual_erros.style.apply(estilizar_relatorio, axis=1) if not df_visual_erros.empty else None
-            
-            # Gera o arquivo Excel
-            excel_bytes = gerar_excel_bytes(styler_excel_completo, styler_excel_erros, df_base_raw, df_prop_raw)
-            
             # ==========================================
-            # PREPARAR DADOS PARA DASHBOARD
+            # ESTRUTURAÇÃO DOS DADOS DO DASHBOARD KPI
             # ==========================================
-            
             total_insumos = len(df_completo)
             total_irregularidades = len(irregularidades)
             
-            # Desagregação de irregularidades
             sobreprecados = len(df_completo[(df_completo['Delta_Preco'] > 0) | (df_completo['Delta_Total'] > 0)])
             quantidades_alteradas = len(df_completo[df_completo['Delta_Qtd'] > 0])
             unidades_incompativeis = len(df_completo[df_completo['Und_Base'] != df_completo['Und_Prop']])
             inexequiveis = len(df_completo[df_completo['Var_Preco_%'] < st.session_state.limiar_desconto])
             
-            # Valores totais
             total_base = df_completo['Total_Base'].sum()
             total_proposta = df_completo['Total_Prop'].sum()
             delta_total = total_proposta - total_base
             var_total_geral = (total_proposta / total_base - 1) if total_base > 0 else 0
-            
-            # Valores de irregularidades
             valor_sobreprecado = irregularidades['Delta_Total'].sum() if not irregularidades.empty else 0
+            taxa_conformidade = ((total_insumos - total_irregularidades) / total_insumos) if total_insumos > 0 else 0
+
+            # Criando DataFrame Estruturado para a aba Resumo Executivo no Excel
+            df_kpi_excel = pd.DataFrame({
+                'Métrica de Controle': [
+                    'Total de Insumos Auditados', 'Insumos com Irregularidades', 'Taxa de Conformidade Geral',
+                    'Valor Total Orçamento Base', 'Valor Total Orçamento Proposto', 'Delta Financeiro Absoluto', 
+                    'Variação Percentual Global', 'Risco Financeiro Total (Sobrepreço)',
+                    'Qtd Itens Sobreprecados (🟥)', 'Qtd Itens com Quantidade Alterada (🟪)', 
+                    'Qtd Itens com Unidade Incompatível (🟨)', 'Qtd Itens Inexequíveis (🟧)'
+                ],
+                'Valor Encontrado': [
+                    total_insumos, total_irregularidades, taxa_conformidade,
+                    total_base, total_proposta, delta_total, 
+                    var_total_geral, valor_sobreprecado,
+                    sobreprecados, quantidades_alteradas, 
+                    unidades_incompativeis, inexequiveis
+                ],
+                'Status / Alerta': [
+                    'OK', 'Requer Atenção' if total_irregularidades > 0 else 'Conforme', 'Crítico' if taxa_conformidade < 0.8 else 'Aceitável',
+                    'Referencial', 'Análise', 'Acima do Esperado' if delta_total > 0 else 'Desconto',
+                    'Atenção', 'Risco Crítico' if valor_sobreprecado > 0 else 'Zero',
+                    'Diligenciar' if sobreprecados > 0 else 'OK', 'Diligenciar' if quantidades_alteradas > 0 else 'OK',
+                    'Corrigir' if unidades_incompativeis > 0 else 'OK', 'Avaliar Riscos' if inexequiveis > 0 else 'OK'
+                ]
+            })
+
+            # ==========================================
+            # ESTRUTURAÇÃO DA ABA DE ITENS NÃO ENCONTRADOS
+            # ==========================================
+            if not df_nao_encontrados.empty:
+                df_detalhe_ne = df_nao_encontrados[[
+                    'Servico_Pai', 'Descricao_Pai', 'Insumo_Filho', 
+                    'Descricao_Filho', 'Und', 'Qtd', 'Preco_Unitario'
+                ]].copy()
+                df_detalhe_ne['Total'] = df_detalhe_ne['Qtd'] * df_detalhe_ne['Preco_Unitario']
+            else:
+                df_detalhe_ne = pd.DataFrame(columns=['Servico_Pai', 'Descricao_Pai', 'Insumo_Filho', 'Descricao_Filho', 'Und', 'Qtd', 'Preco_Unitario', 'Total'])
+
+            # ==========================================
+            # ESTRUTURAÇÃO DA ABA DE ERROS DE PARSING
+            # ==========================================
+            logs_parsing_lista = []
+            if 'Status_Parsing' in df_base_raw.columns:
+                err_b = df_base_raw[df_base_raw['Status_Parsing'] != 'OK']
+                if not err_b.empty:
+                    for _, r in err_b.iterrows():
+                        logs_parsing_lista.append({'Origem': 'Base Referência', 'Código': r['Insumo_Filho'], 'Descrição': r['Descricao_Filho'], 'Erro': 'Falha estrutural'})
+            if 'Status_Parsing' in df_prop_raw.columns:
+                err_p = df_prop_raw[df_prop_raw['Status_Parsing'] != 'OK']
+                if not err_p.empty:
+                    for _, r in err_p.iterrows():
+                        logs_parsing_lista.append({'Origem': 'Proposta Empreiteira', 'Código': r['Insumo_Filho'], 'Descrição': r['Descricao_Filho'], 'Erro': 'Falha estrutural'})
+            df_parsing_excel = pd.DataFrame(logs_parsing_lista) if logs_parsing_lista else pd.DataFrame(columns=['Origem', 'Código', 'Descrição', 'Erro'])
+
+            # ==========================================
+            # COMPILAÇÃO FINAL DO SUPER ARQUIVO EXCEL MULTI-ABA
+            # ==========================================
+            excel_bytes = gerar_excel_bytes(
+                df_kpi=df_kpi_excel,
+                df_matriz=df_visual_completo,
+                df_inconformidades=df_visual_erros,
+                df_nao_encontrados=df_detalhe_ne,
+                df_parsing=df_parsing_excel,
+                df_db_base=df_base_raw,
+                df_db_prop=df_prop_raw
+            )
             
             st.divider()
             
-            # Criar tabs
+            # Criar abas visuais no Streamlit
             tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
                 "📊 Dashboard KPI",
                 "📋 Matriz Completa", 
@@ -473,253 +615,121 @@ if arquivo_base and arquivo_proposta:
             ])
             
             # ==========================================
-            # TAB 1: DASHBOARD KPI
+            # TAB 1: DASHBOARD KPI (TELA)
             # ==========================================
             with tab1:
                 st.subheader("📊 Resumo Executivo da Auditoria")
                 
                 col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-                
                 with col_kpi1:
-                    st.metric(
-                        "📌 Total de Insumos",
-                        f"{total_insumos:,.0f}",
-                        delta=f"{total_irregularidades} com irregularidades"
-                    )
-                
+                    st.metric("📌 Total de Insumos", f"{total_insumos:,.0f}", delta=f"{total_irregularidades} com desvios")
                 with col_kpi2:
-                    st.metric(
-                        "💰 Delta Financeiro",
-                        f"R$ {delta_total:,.2f}",
-                        delta=f"{var_total_geral:+.2%}",
-                        delta_color="inverse"
-                    )
-                
+                    st.metric("💰 Delta Financeiro", f"R$ {delta_total:,.2f}", delta=f"{var_total_geral:+.2%}", delta_color="inverse")
                 with col_kpi3:
-                    taxa_conformidade = ((total_insumos - total_irregularidades) / total_insumos * 100) if total_insumos > 0 else 0
-                    st.metric(
-                        "✅ Taxa de Conformidade",
-                        f"{taxa_conformidade:.1f}%",
-                        delta=f"{total_irregularidades} desvios"
-                    )
-                
+                    st.metric("✅ Taxa de Conformidade", f"{taxa_conformidade*100:.1f}%", delta=f"{total_irregularidades} desvios")
                 with col_kpi4:
-                    st.metric(
-                        "🚨 Risco Financeiro",
-                        f"R$ {abs(valor_sobreprecado):,.2f}",
-                        help="Valor total de sobrepreços identificados"
-                    )
+                    st.metric("🚨 Risco Financeiro", f"R$ {abs(valor_sobreprecado):,.2f}", help="Valor total de sobrepreços identificados")
                 
                 st.divider()
-                
                 col_d1, col_d2 = st.columns(2)
-                
                 with col_d1:
                     st.subheader("Desagregação de Irregularidades")
-                    irregularidades_data = {
-                        'Tipo': [
-                            '🟥 Sobrepreço',
-                            '🟪 Qtd. Alterada',
-                            '🟨 Unidade Incompat.',
-                            '🟧 Inexequível'
-                        ],
-                        'Quantidade': [
-                            sobreprecados,
-                            quantidades_alteradas,
-                            unidades_incompativeis,
-                            inexequiveis
-                        ]
-                    }
-                    df_irregular = pd.DataFrame(irregularidades_data)
-                    
-                    # Gráfico de barras horizontal
-                    st.bar_chart(
-                        df_irregular.set_index('Tipo')['Quantidade'],
-                        height=300,
-                        use_container_width=True
-                    )
+                    df_irregular = pd.DataFrame({
+                        'Tipo': ['🟥 Sobrepreço', '🟪 Qtd. Alterada', '🟨 Unidade Incompat.', '🟧 Inexequível'],
+                        'Quantidade': [sobreprecados, quantidades_alteradas, unidades_incompativeis, inexequiveis]
+                    })
+                    st.bar_chart(df_irregular.set_index('Tipo')['Quantidade'], height=300, use_container_width=True)
                 
                 with col_d2:
                     st.subheader("Resumo Financeiro")
-                    
-                    summary_data = {
+                    df_summary = pd.DataFrame({
                         'Métrica': ['Orçamento Base', 'Orçamento Proposto', 'Variação Absoluta'],
                         'Valor': [f'R$ {total_base:,.2f}', f'R$ {total_proposta:,.2f}', f'R$ {delta_total:,.2f}']
-                    }
-                    df_summary = pd.DataFrame(summary_data)
+                    })
                     st.dataframe(df_summary, hide_index=True, use_container_width=True)
                     
-                    # Colorir segunda linha se tiver irregularidades
                     if total_irregularidades > 0:
-                        st.info(
-                            f"**{total_irregularidades} insumos com desvios**\n\n"
-                            f"- {sobreprecados} com sobrepreço\n"
-                            f"- {quantidades_alteradas} com quantidade alterada\n"
-                            f"- {unidades_incompativeis} com unidade incompatível\n"
-                            f"- {inexequiveis} com desconto excessivo"
-                        )
+                        st.info(f"**{total_irregularidades} desvios mapeados:**\n\n- {sobreprecados} com sobrepreço\n- {quantidades_alteradas} com quantidade alterada\n- {unidades_incompativeis} com unidade incompatível\n- {inexequiveis} com desconto excessivo")
                     else:
                         st.success("✅ Orçamento em conformidade total!")
                 
                 st.divider()
                 st.download_button(
-                    "📥 Baixar Processo de Auditoria Completo (.XLSX)", 
+                    "📥 Baixar Relatório de Auditoria Consolidado (Todas as Abas .XLSX)", 
                     data=excel_bytes, 
-                    file_name='Auditoria_PRO_Laudo.xlsx', 
-                    width='stretch',
-                    key='download_dashboard'
+                    file_name='Laudo_Auditoria_Orcamentaria_PRO.xlsx', 
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True,
+                    key='dl_kpi'
                 )
             
             # ==========================================
-            # TAB 2: MATRIZ COMPLETA
+            # TAB 2: MATRIZ COMPLETA (TELA)
             # ==========================================
             with tab2:
                 st.download_button(
-                    "📥 Baixar Processo de Auditoria Completo (.XLSX)", 
+                    "📥 Baixar Relatório de Auditoria Consolidado (Todas as Abas .XLSX)", 
                     data=excel_bytes, 
-                    file_name='Auditoria_PRO_Laudo.xlsx', 
-                    width='stretch',
-                    key='download_matriz'
+                    file_name='Laudo_Auditoria_Orcamentaria_PRO.xlsx', 
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True,
+                    key='dl_matriz'
                 )
-                st.dataframe(styler_ui_completo, width='stretch', height=600, use_container_width=True)
+                st.dataframe(styler_ui_completo, height=600, use_container_width=True)
             
             # ==========================================
-            # TAB 3: INCONFORMIDADES
+            # TAB 3: INCONFORMIDADES (TELA)
             # ==========================================
             with tab3:
+                st.download_button(
+                    "📥 Baixar Relatório de Auditoria Consolidado (Todas as Abas .XLSX)", 
+                    data=excel_bytes, 
+                    file_name='Laudo_Auditoria_Orcamentaria_PRO.xlsx', 
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True,
+                    key='dl_erro'
+                )
                 if styler_ui_erros is not None:
-                    st.dataframe(styler_ui_erros, width='stretch', height=400, use_container_width=True)
+                    st.dataframe(styler_ui_erros, height=500, use_container_width=True)
                 else:
                     st.success("✅ Tudo em conformidade!")
             
             # ==========================================
-            # TAB 4: ITENS NÃO ENCONTRADOS NA BASE
+            # TAB 4: ITENS NÃO ENCONTRADOS (TELA)
             # ==========================================
             with tab4:
                 st.subheader("📍 Itens da Proposta que Não Existem na Base")
-                
                 if not df_nao_encontrados.empty:
-                    st.error(
-                        f"🚨 **{len(df_nao_encontrados)} insumos** da proposta não foram encontrados na base de referência. "
-                        f"Isso representa **{(len(df_nao_encontrados)/len(df_prop_raw)*100):.1f}%** do total."
-                    )
+                    st.error(f"🚨 **{len(df_nao_encontrados)} insumos** da proposta não foram encontrados na base. Isto representa **{(len(df_nao_encontrados)/len(df_prop_raw)*100):.1f}%** do total.")
                     
-                    st.info(
-                        "**Possíveis causas:**\n"
-                        "1. Diferença entre tabelas de referência (SINAPI vs ORSE ou versões diferentes)\n"
-                        "2. Erros de digitação nos códigos de serviço/insumo\n"
-                        "3. Insumos especiais ou adaptados não presentes na base\n"
-                        "4. Estrutura hierárquica incompatível"
-                    )
-                    
-                    st.divider()
-                    
-                    # Preparar visualização com agrupamento por Serviço Pai
                     df_agrp = df_nao_encontrados.groupby('Servico_Pai').agg({
-                        'Descricao_Pai': 'first',
-                        'Insumo_Filho': 'count',
-                        'Qtd': 'sum',
-                        'Preco_Unitario': 'mean'
-                    }).rename(columns={
-                        'Descricao_Pai': 'Descrição do Serviço',
-                        'Insumo_Filho': 'Qtd de Insumos',
-                        'Qtd': 'Total Quantitativo',
-                        'Preco_Unitario': 'Preço Médio'
-                    })
+                        'Descricao_Pai': 'first', 'Insumo_Filho': 'count', 'Qtd': 'sum', 'Preco_Unitario': 'mean'
+                    }).rename(columns={'Descricao_Pai': 'Descrição do Serviço', 'Insumo_Filho': 'Qtd de Insumos', 'Qtd': 'Total Quantitativo', 'Preco_Unitario': 'Preço Médio'})
                     
-                    st.subheader("Resumo por Serviço (Composição Pai)")
-                    st.dataframe(
-                        df_agrp.style.format({
-                            'Qtd de Insumos': '{:.0f}',
-                            'Total Quantitativo': '{:.4f}',
-                            'Preço Médio': 'R$ {:.2f}'
-                        }),
-                        use_container_width=True
-                    )
-                    
+                    st.dataframe(df_agrp.style.format({'Qtd de Insumos': '{:.0f}', 'Total Quantitativo': '{:.4f}', 'Preço Médio': 'R$ {:.2f}'}), use_container_width=True)
                     st.divider()
                     
-                    # Tabela detalhada
-                    st.subheader("Detalhamento Completo")
-                    
-                    df_detalhe = df_nao_encontrados[[
-                        'Servico_Pai', 'Descricao_Pai', 'Insumo_Filho', 
-                        'Descricao_Filho', 'Und', 'Qtd', 'Preco_Unitario'
-                    ]].copy()
-                    
-                    df_detalhe['Total'] = df_detalhe['Qtd'] * df_detalhe['Preco_Unitario']
-                    df_detalhe = df_detalhe.rename(columns={
-                        'Servico_Pai': 'Código Serviço',
-                        'Descricao_Pai': 'Descrição Serviço',
-                        'Insumo_Filho': 'Código Insumo',
-                        'Descricao_Filho': 'Descrição Insumo',
-                        'Und': 'Unidade',
-                        'Qtd': 'Quantidade',
-                        'Preco_Unitario': 'Preço Unit.'
-                    })
-                    
-                    # Formatação para visualização
-                    df_display = df_detalhe.copy()
-                    df_display['Quantidade'] = df_display['Quantidade'].apply(lambda x: f"{x:.4f}")
-                    df_display['Preço Unit.'] = df_display['Preço Unit.'].apply(lambda x: f"R$ {x:.2f}")
+                    df_display = df_detalhe_ne.copy()
+                    df_display['Qtd'] = df_display['Qtd'].apply(lambda x: f"{x:.4f}")
+                    df_display['Preco_Unitario'] = df_display['Preco_Unitario'].apply(lambda x: f"R$ {x:.2f}")
                     df_display['Total'] = df_display['Total'].apply(lambda x: f"R$ {x:.2f}")
-                    
-                    st.dataframe(df_display, use_container_width=True, height=500)
-                    
-                    # Botão para download
-                    st.divider()
-                    
-                    # Criar arquivo de exportação
-                    output_excel = io.BytesIO()
-                    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-                        df_detalhe.to_excel(writer, sheet_name='Itens Não Encontrados', index=False)
-                        df_agrp.to_excel(writer, sheet_name='Resumo por Serviço')
-                    
-                    st.download_button(
-                        "📥 Baixar Lista de Itens Não Encontrados (.XLSX)",
-                        data=output_excel.getvalue(),
-                        file_name='Itens_Nao_Encontrados.xlsx',
-                        key='download_nao_encontrados',
-                        width='stretch'
-                    )
-                    
+                    st.dataframe(df_display, use_container_width=True, height=400)
                 else:
-                    st.success(
-                        "✅ **Perfeito!** Todos os insumos da proposta foram encontrados na base. "
-                        "Taxa de correspondência: 100%"
-                    )
+                    st.success("✅ Perfeito! Todos os insumos da proposta existem na base de referência (Match: 100%).")
             
             # ==========================================
-            # TAB 5: LOG DE ERROS DE PARSING
+            # TAB 5: LOG DE PARSING (TELA)
             # ==========================================
             with tab5:
-                # Extrair logs de ambos os arquivos
-                logs_combinados = []
-                
-                # Logs do arquivo base
-                if 'Status_Parsing' in df_base_raw.columns:
-                    erros_base = df_base_raw[df_base_raw['Status_Parsing'] != 'OK']
-                    if not erros_base.empty:
-                        logs_combinados.append(("Base", erros_base[['Insumo_Filho', 'Descricao_Filho']]))
-                
-                # Logs do arquivo proposta
-                if 'Status_Parsing' in df_prop_raw.columns:
-                    erros_prop = df_prop_raw[df_prop_raw['Status_Parsing'] != 'OK']
-                    if not erros_prop.empty:
-                        logs_combinados.append(("Proposta", erros_prop[['Insumo_Filho', 'Descricao_Filho']]))
-                
-                if logs_combinados:
-                    for origem, df_erros in logs_combinados:
-                        st.subheader(f"Erros em {origem}")
-                        st.dataframe(df_erros, use_container_width=True)
+                if not df_parsing_excel.empty:
+                    st.dataframe(df_parsing_excel, use_container_width=True)
                 else:
-                    st.success("✅ Nenhum erro de parsing encontrado!")
+                    st.success("✅ Nenhum erro de parsing estrutural detectado!")
             
             # ==========================================
-            # TAB 6 & 7: DATABASES
+            # TAB 6 & 7: DATABASES BRUTOS (TELA)
             # ==========================================
             with tab6: 
-                st.dataframe(df_base_raw, width='stretch', height=400, use_container_width=True)
-            
+                st.dataframe(df_base_raw, height=400, use_container_width=True)
             with tab7: 
-                st.dataframe(df_prop_raw, width='stretch', height=400, use_container_width=True)
+                st.dataframe(df_prop_raw, height=400, use_container_width=True)
