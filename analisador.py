@@ -167,7 +167,7 @@ def estilizar_relatorio_raw(row):
 # 3. MOTOR EXPORTADOR EXCEL MULTI-ABA
 # ==========================================
 
-def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrados, df_parsing, df_db_base, df_db_prop):
+def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrados_base, df_nao_encontrados_prop, df_parsing, df_db_base, df_db_prop):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         
@@ -177,7 +177,9 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         else:
             ws_inc = writer.book.create_sheet(title='🚨 Inconformidades')
             ws_inc['A1'] = "Nenhuma inconformidade paramétrica detectada."
-        df_nao_encontrados.to_excel(writer, index=False, sheet_name='📍 Itens Não Encontrados', startrow=1)
+            
+        df_nao_encontrados_base.to_excel(writer, index=False, sheet_name='📍 Não Encontrados na Base', startrow=1)
+        df_nao_encontrados_prop.to_excel(writer, index=False, sheet_name='📍 Omitidos na Proposta', startrow=1)
         df_parsing.to_excel(writer, index=False, sheet_name='📝 Log de Erros de Parsing', startrow=1)
         df_db_base.to_excel(writer, index=False, sheet_name='🗄️ DB Base', startrow=1)
         df_db_prop.to_excel(writer, index=False, sheet_name='🗄️ DB Proposta', startrow=1)
@@ -201,7 +203,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         title.alignment = Alignment(horizontal="center", vertical="center")
 
         def desenhar_card(row, col, title, value, format_type='int'):
-            # Faixa Título do Card
             c_title = ws_kpi.cell(row=row, column=col)
             c_title.value = title
             c_title.font = Font(bold=True, color="FFFFFF", size=10)
@@ -211,7 +212,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
             ws_kpi.cell(row=row, column=col+1).border = border_box
             ws_kpi.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col+1)
 
-            # Bloco Valor do Card
             c_val = ws_kpi.cell(row=row+1, column=col)
             c_val.value = value
             c_val.font = Font(size=14, bold=True, color="0F172A")
@@ -228,12 +228,10 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
             elif format_type == 'percent': c_val.number_format = '0.00%'
             else: c_val.number_format = '#,##0'
 
-        # Linha 1 de KPIs (Gerais)
         desenhar_card(5, 2, "ITENS AUDITADOS", dash_data['total_insumos'], 'int')
         desenhar_card(5, 5, "SALDO DO ORÇAMENTO", dash_data['total_proposta'], 'currency')
         desenhar_card(5, 8, "TAXA DE CONFORMIDADE", dash_data['taxa_conformidade'], 'percent')
 
-        # Linha 2 de KPIs (Riscos)
         desenhar_card(9, 2, "RISCO SOBREPREÇO", dash_data['financeiro_sobrepreco'], 'currency')
         desenhar_card(9, 5, "DESCONTO OCULTO (INEX)", dash_data['financeiro_inexequivel'], 'currency')
         desenhar_card(9, 8, "MAIOR DESVIO ÚNICO", dash_data['max_desvio'], 'currency')
@@ -241,13 +239,11 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         def desenhar_tabela(start_row, start_col, df, title_text):
             if df.empty: return start_row
             
-            # Título da Tabela
             t_cell = ws_kpi.cell(row=start_row, column=start_col)
             t_cell.value = title_text
             t_cell.font = Font(bold=True, size=11, color="1E3A8A")
             ws_kpi.merge_cells(start_row=start_row, start_column=start_col, end_row=start_row, end_column=start_col + len(df.columns) - 1)
 
-            # Cabeçalhos
             for c_idx, col_name in enumerate(df.columns):
                 cell = ws_kpi.cell(row=start_row+1, column=start_col+c_idx)
                 cell.value = col_name
@@ -256,7 +252,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 cell.alignment = Alignment(horizontal="center")
                 cell.border = border_box
 
-            # Injeção de Dados e Máscaras
             for r_idx, row in enumerate(df.values):
                 for c_idx, val in enumerate(row):
                     cell = ws_kpi.cell(row=start_row+2+r_idx, column=start_col+c_idx)
@@ -271,14 +266,12 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                     
             return start_row + len(df) + 4 
 
-        # Desenho Estrutural das Tabelas Analíticas
         desenhar_tabela(14, 2, dash_data['count_graf'], "📌 OCORRÊNCIAS POR TIPOLOGIA")
         desenhar_tabela(14, 6, dash_data['money_graf'], "💸 IMPACTO FINANCEIRO LÍQUIDO")
 
         next_row = desenhar_tabela(23, 2, dash_data['top_sobre'], "🎯 FRENTE 1: TOP 5 IMPACTOS DE SOBREPREÇO")
         desenhar_tabela(next_row, 2, dash_data['top_inex'], "🎯 FRENTE 2: TOP 5 RISCOS DE INEXEQUIBILIDADE")
 
-        # Layout do Grid (Larguras de Respiro e Conteúdo)
         ws_kpi.column_dimensions['A'].width = 3
         ws_kpi.column_dimensions['B'].width = 15
         ws_kpi.column_dimensions['C'].width = 32
@@ -314,7 +307,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 injetar_legenda(ws)
                 linha_cabecalho = 9
                 col_unidade_idx = 3
-            elif name in ['📍 Itens Não Encontrados', '🗄️ DB Base', '🗄️ DB Proposta']:
+            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🗄️ DB Base', '🗄️ DB Proposta']:
                 linha_cabecalho = 1
                 col_unidade_idx = 3
             else:
@@ -389,12 +382,14 @@ with st.sidebar:
     st.success(f"📌 **Limiar Configurado: {limiar_desconto}%**")
     st.divider()
     st.subheader("📌 Legenda de Auditoria")
-    st.markdown("""
+    
+    html_legend = """
     <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fca5a5; color: #7f1d1d; font-family: sans-serif; font-size:13px;"><b>🟥 Vermelho (Sobrepreço)</b><br>Preço unitário ou total superior à base.</div>
     <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #e9d5ff; color: #6b21a8; font-family: sans-serif; font-size:13px;"><b>🟪 Roxo (Qtd. Alterada)</b><br>Quantidade do insumo majorada.</div>
     <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fdba74; color: #7c2d12; font-family: sans-serif; font-size:13px;"><b>🟧 Laranja (Inexequibilidade)</b><br>Desconto excessivo.</div>
     <div style="padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fef08a; color: #713f12; font-family: sans-serif; font-size:13px;"><b>🟨 Amarelo (Fraude Métrica)</b><br>Unidades de Medida incompatíveis.</div>
-    """, unsafe_allow_html=True)
+    """
+    st.markdown(html_legend, unsafe_allow_html=True)
 
 st.title("🛡️ Auditoria de Orçamentos PRO")
 st.markdown("Validação paramétrica de planilhas orçamentárias de Engenharia Civil.")
@@ -416,8 +411,14 @@ if arquivo_base and arquivo_proposta:
             df_prop = df_prop_raw.copy().set_index(['Servico_Pai', 'Insumo_Filho'])
             
             df_auditoria = df_base.join(df_prop[['Und', 'Qtd', 'Preco_Unitario']], how='inner', rsuffix='_Prop')
-            indices_nao_encontrados = set(df_prop.index) - set(df_base.index)
-            df_nao_encontrados = df_prop_raw[df_prop_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados)].reset_index(drop=True) if indices_nao_encontrados else pd.DataFrame()
+            
+            # Proposta -> Base (Itens adicionais na proposta, não encontrados na base)
+            indices_nao_encontrados_base = set(df_prop.index) - set(df_base.index)
+            df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_base)].reset_index(drop=True) if indices_nao_encontrados_base else pd.DataFrame()
+            
+            # Base -> Proposta (Itens omitidos na proposta, presentes apenas na base)
+            indices_nao_encontrados_prop = set(df_base.index) - set(df_prop.index)
+            df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_prop)].reset_index(drop=True) if indices_nao_encontrados_prop else pd.DataFrame()
             
             df_auditoria.rename(columns={'Und': 'Und_Base', 'Qtd': 'Qtd_Base', 'Preco_Unitario': 'Preco_Base', 'Und_Prop': 'Und_Prop', 'Qtd_Prop': 'Qtd_Prop', 'Preco_Unitario_Prop': 'Preco_Prop'}, inplace=True)
             df_auditoria['Total_Base'] = df_auditoria['Qtd_Base'] * df_auditoria['Preco_Base']
@@ -439,7 +440,10 @@ if arquivo_base and arquivo_proposta:
             
             df_visual_completo = transformar_hierarquico(df_completo)
             df_visual_erros = transformar_hierarquico(irregularidades) if not irregularidades.empty else pd.DataFrame()
-            df_visual_ne = transformar_hierarquico_raw(df_nao_encontrados)
+            
+            df_visual_ne_base = transformar_hierarquico_raw(df_nao_encontrados_base)
+            df_visual_ne_prop = transformar_hierarquico_raw(df_nao_encontrados_prop)
+            
             df_visual_db_base = transformar_hierarquico_raw(df_base_raw)
             df_visual_db_prop = transformar_hierarquico_raw(df_prop_raw)
             
@@ -458,7 +462,6 @@ if arquivo_base and arquivo_proposta:
             sobreprecados, quantidades_alteradas = len(df_completo[sobrepreco_filter]), len(df_completo[qtd_filter])
             unidades_incompativeis, inexequiveis = len(df_completo[und_filter]), len(df_completo[inexequivel_filter])
             
-            # Preparação de Dataframes Específicos para os Blocos Analíticos do Excel
             df_top_sobre = df_completo[df_completo['Delta_Total'] > 0].sort_values(by='Delta_Total', ascending=False).head(5)
             if not df_top_sobre.empty:
                 df_top_sobre_view = df_top_sobre[['Insumo_Filho', 'Descricao_Filho', 'Delta_Total', 'Var_Preco_%']].copy()
@@ -482,18 +485,30 @@ if arquivo_base and arquivo_proposta:
             logs_parsing_lista = []
             df_parsing_excel = pd.DataFrame(logs_parsing_lista) if logs_parsing_lista else pd.DataFrame(columns=['Origem', 'Código', 'Descrição', 'Erro'])
             
-            excel_bytes = gerar_excel_bytes(dash_data_excel, df_visual_completo, df_visual_erros, df_visual_ne, df_parsing_excel, df_visual_db_base, df_visual_db_prop)
+            excel_bytes = gerar_excel_bytes(dash_data_excel, df_visual_completo, df_visual_erros, df_visual_ne_base, df_visual_ne_prop, df_parsing_excel, df_visual_db_base, df_visual_db_prop)
             
             formato_tela = {'Qtd_Base': '{:.4f}', 'Qtd_Prop': '{:.4f}', 'Delta_Qtd': '{:.4f}', 'Preco_Base': 'R$ {:.2f}', 'Preco_Prop': 'R$ {:.2f}', 'Delta_Preco': 'R$ {:.2f}', 'Var_Preco_%': '{:.2%}', 'Total_Base': 'R$ {:.2f}', 'Total_Prop': 'R$ {:.2f}', 'Delta_Total': 'R$ {:.2f}', 'Var_Total_%': '{:.2%}'}
             formato_tela_raw = {'Quantidade': '{:.4f}', 'Preço Unitário': 'R$ {:.2f}', 'Total': 'R$ {:.2f}'}
             
             styler_ui_completo = df_visual_completo.style.format(formato_tela, na_rep="").apply(estilizar_relatorio, axis=1)
             styler_ui_erros = df_visual_erros.style.format(formato_tela, na_rep="").apply(estilizar_relatorio, axis=1) if not df_visual_erros.empty else None
-            styler_ui_ne = df_visual_ne.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1) if not df_visual_ne.empty else None
+            
+            styler_ui_ne_base = df_visual_ne_base.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1) if not df_visual_ne_base.empty else None
+            styler_ui_ne_prop = df_visual_ne_prop.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1) if not df_visual_ne_prop.empty else None
+            
             styler_ui_db_base = df_visual_db_base.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1)
             styler_ui_db_prop = df_visual_db_prop.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1)
             
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Dashboard KPI", "📋 Matriz Completa", "🚨 Inconformidades", "📍 Itens Não Encontrados", "📝 Log de Erros de Parsing", "🗄️ DB Base", "🗄️ DB Proposta"])
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+                "📊 Dashboard KPI", 
+                "📋 Matriz Completa", 
+                "🚨 Inconformidades", 
+                "📍 Não Encontrados na Base", 
+                "📍 Omitidos na Proposta", 
+                "📝 Log de Erros de Parsing", 
+                "🗄️ DB Base", 
+                "🗄️ DB Proposta"
+            ])
             
             with tab1:
                 st.subheader("📊 Painel Analítico de Conformidade Contratual")
@@ -537,8 +552,11 @@ if arquivo_base and arquivo_proposta:
                 if styler_ui_erros is not None: st.dataframe(styler_ui_erros, height=500, use_container_width=True)
                 else: st.success("✅ Tudo em conformidade!")
             with tab4:
-                if styler_ui_ne is not None: st.dataframe(styler_ui_ne, height=500, use_container_width=True)
+                if styler_ui_ne_base is not None: st.dataframe(styler_ui_ne_base, height=500, use_container_width=True)
                 else: st.success("✅ Alinhamento Completo! Todos os insumos da proposta existem na base.")
-            with tab5: st.success("✅ Zero erros estruturais identificados.")
-            with tab6: st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
-            with tab7: st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
+            with tab5:
+                if styler_ui_ne_prop is not None: st.dataframe(styler_ui_ne_prop, height=500, use_container_width=True)
+                else: st.success("✅ Alinhamento Completo! A proposta contempla 100% dos itens presentes na base de referência.")
+            with tab6: st.success("✅ Zero erros estruturais identificados.")
+            with tab7: st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
+            with tab8: st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
