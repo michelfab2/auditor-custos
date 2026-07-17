@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import re
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import hashlib
@@ -33,49 +34,157 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
         cod_pai_atual, desc_pai_atual = None, ""
         ordem_sequencial = 0
         
-        col_tipo = 0
-        col_cod, col_desc, col_und, col_quant, col_preco = 1, None, None, None, None
+        in_orse_detail = False
+        is_sicro_section = False
+        skip_items = False
         
+        # Mapeamento dinâmico SICRO3/IOPES
+        sicro_col_quant = 4
+        sicro_col_und = None
+        sicro_col_preco = None
+        
+        # Mapeamento padrão (SINAPI)
+        col_cod, col_desc, col_und, col_quant, col_preco = 1, 3, 6, 7, 8
+        
+        def parse_number(val):
+            if val is None or val == '' or val == '*':
+                return 0.0
+            if isinstance(val, (int, float)):
+                return float(val)
+            val = str(val).strip()
+            if ',' in val and '.' in val:
+                val = val.replace('.', '').replace(',', '.')
+            elif ',' in val:
+                val = val.replace(',', '.')
+            try:
+                return float(val)
+            except ValueError:
+                return 0.0
+
         for idx, row in df_raw.iterrows():
-            row_lower = [str(x).strip().lower() for x in row]
+            row_list = [str(x).strip() if pd.notna(x) else '' for x in row]
+            row_lower = [x.lower() for x in row_list]
+            col0 = row_list[0].lower() if len(row_list) > 0 else ''
             
-            if any(h in row_lower for h in ['código', 'codigo']):
-                for i, val in enumerate(row_lower):
-                    if val in ['código', 'codigo']: col_cod = i
-                    elif any(d in val for d in ['descrição', 'descricao', 'desc']): col_desc = i
-                    elif any(u in val for u in ['und', 'unidade', 'unid', 'u.m.']): col_und = i
-                    elif any(q in val for q in ['quant', 'quantidade', 'qtd']): col_quant = i
-                    elif any(p in val for p in ['valor unit', 'preço unit', 'preco unit', 'unit', 'preço', 'preco']): col_preco = i
+            # 1. Ignorar Detalhamento ORSE
+            if 'detalhamento de cálculo orse' in col0 or 'detalhamento de calculo orse' in col0:
+                in_orse_detail = True
                 continue
                 
-            if col_quant is None or col_preco is None: continue
+            # 2. Fim de Composição (Reseta Estados)
+            if any('mo sem ls' in x for x in row_lower) or any('valor do bdi' in x for x in row_lower):
+                cod_pai_atual = None
+                is_sicro_section = False
+                in_orse_detail = False
+                skip_items = False
+                continue
                 
-            try:
-                tipo_item = str(row[col_tipo]).strip().lower()
-                cod_item = str(row[col_cod]).strip().upper()
-                desc_item = str(row[col_desc]).strip() if col_desc is not None else ""
-                und_item = str(row[col_und]).strip().upper() if col_und is not None else ""
+            # 3. Novo Bloco Principal (1.1, 2.1, etc.)
+            if re.match(r'^\d+\.\d+$', col0):
+                cod_pai_atual = None
+                is_sicro_section = False
+                in_orse_detail = False
+                skip_items = False
+                continue
                 
-                try:
-                    qtd_valor = float(row[col_quant])
-                    preco_valor = float(row[col_preco])
-                except (ValueError, TypeError):
-                    log_erros_parse.append({'Linha': idx + 1, 'Código': cod_item, 'Descrição': desc_item, 'Erro': "Conversão numérica falhou"})
-                    continue
+            # 4. Sub-cabeçalhos SICRO3/SETOP/IOPES (Iniciam com B, C, D, E, F, G)
+            if len(col0) == 1 and col0.upper() in ['B', 'C', 'D', 'E', 'F', 'G']:
+                is_sicro_section = True
+                skip_items = False
+                sicro_col_quant = 4
+                sicro_col_und = None
+                sicro_col_preco = None
+                for i, val in enumerate(row_lower):
+                    if 'quant' in val: sicro_col_quant = i
+                    elif 'unidade' in val or val == 'un': sicro_col_und = i
+                    elif 'preço unit' in val or 'preco unit' in val: sicro_col_preco = i
+                    elif 'custo horário' in val or 'custo horario' in val:
+                        if sicro_col_preco is None: sicro_col_preco = i # Em Mão de Obra, Custo Horário é o Preço
                 
-                if tipo_item in ['composição', 'composicao']:
-                    cod_pai_atual = cod_item
-                    desc_pai_atual = desc_item
-                elif tipo_item in ['insumo', 'composição auxiliar', 'composicao auxiliar']:
-                    if cod_pai_atual and cod_item and cod_item != 'NAN':
+                if 'transporte' in ' '.join(row_lower):
+                    skip_items = True # Ignora itens de transporte (bloco F do SICRO3)
+                continue
+                
+            # 5. Cabeçalhos Padrão (SINAPI, SEINFRA, Bases Próprias)
+            if 'código' in row_lower or 'codigo' in row_lower:
+                is_sicro_section = False
+                skip_items = False
+                for i, val in enumerate(row_lower):
+                    if val in ['código', 'codigo']: col_cod = i
+                    elif any(d in val for d in ['descrição', 'descricao']): col_desc = i
+                    elif any(u in val for u in ['und', 'unidade', 'unid']): col_und = i
+                    elif any(q in val for q in ['quant', 'qtd']): col_quant = i
+                    elif any(p in val for p in ['valor unit', 'preço unit', 'preco unit']): col_preco = i
+                continue
+                
+            # 6. Itens e Composições
+            if col0 in ['insumo', 'composição auxiliar', 'composicao auxiliar', 'item', 'composição', 'composicao']:
+                if in_orse_detail or skip_items: continue
+                if col_cod < len(row_list):
+                    cod_item = row_list[col_cod].upper()
+                    if cod_item.lower() in ['código', 'codigo', '', 'nan']: continue
+                    
+                    desc_item = row_list[col_desc] if col_desc is not None and col_desc < len(row_list) else ""
+                    
+                    # Se não tem pai definido e é composição, vira o Pai
+                    if cod_pai_atual is None and col0 in ['composição', 'composicao']:
+                        cod_pai_atual = cod_item
+                        desc_pai_atual = desc_item
+                        continue
+                    else:
+                        # É um Filho
+                        if cod_pai_atual is None: continue # Órfão, ignora
+                        
+                        if is_sicro_section:
+                            qtd_idx = sicro_col_quant if sicro_col_quant is not None else 4
+                            und_idx = sicro_col_und
+                            preco_idx = sicro_col_preco
+                            
+                            qtd_valor = parse_number(row_list[qtd_idx]) if qtd_idx < len(row_list) else 0.0
+                            
+                            if und_idx is not None and und_idx < len(row_list) and row_list[und_idx] != '*':
+                                und_item = row_list[und_idx].upper()
+                            else:
+                                und_item = 'H' # Default para Mão de Obra SICRO3/IOPES
+                                
+                            if preco_idx is not None and preco_idx < len(row_list) and row_list[preco_idx] != '*':
+                                preco_valor = parse_number(row_list[preco_idx])
+                            else:
+                                # Fallback Definitivo: Procura de trás pra frente o Custo Total (último) e Preço Unitário (penúltimo)
+                                preco_valor = 0.0
+                                last_num_idx = -1
+                                for i in range(len(row_list) - 1, qtd_idx, -1):
+                                    val = row_list[i]
+                                    if val != '*' and val != '':
+                                        parsed = parse_number(val)
+                                        if parsed > 0:
+                                            last_num_idx = i
+                                            break
+                                
+                                if last_num_idx != -1:
+                                    # Tenta pegar o número imediatamente antes do Total (Preço Unitário)
+                                    if last_num_idx - 1 >= 0:
+                                        val_preco = row_list[last_num_idx - 1]
+                                        if val_preco != '*' and val_preco != '':
+                                            parsed_preco = parse_number(val_preco)
+                                            if parsed_preco > 0:
+                                                preco_valor = parsed_preco
+                                    
+                                    # Se não achou preço unitário separado, usa o próprio Total
+                                    if preco_valor == 0.0:
+                                        preco_valor = parse_number(row_list[last_num_idx])
+                        else:
+                            # Padrão SINAPI
+                            und_item = row_list[col_und].upper() if col_und < len(row_list) else ""
+                            qtd_valor = parse_number(row_list[col_quant]) if col_quant < len(row_list) else 0.0
+                            preco_valor = parse_number(row_list[col_preco]) if col_preco < len(row_list) else 0.0
+
                         ordem_sequencial += 1
                         dados.append({
                             'Ordem': ordem_sequencial, 'Servico_Pai': cod_pai_atual, 'Descricao_Pai': desc_pai_atual,
                             'Insumo_Filho': cod_item, 'Descricao_Filho': desc_item, 'Und': und_item,
                             'Qtd': qtd_valor, 'Preco_Unitario': preco_valor, 'Status_Parsing': 'OK'
                         })
-            except Exception as e:
-                log_erros_parse.append({'Linha': idx + 1, 'Código': str(row[col_cod]) if col_cod < len(row) else 'N/A', 'Descrição': str(row[col_desc]) if col_desc and col_desc < len(row) else 'N/A', 'Erro': str(e)})
                     
         df_final = pd.DataFrame(dados)
         if df_final.empty: return None, f"Planilha {nome_arquivo}: Nenhum dado válido extraído.", None
@@ -194,7 +303,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         
         border_box = Border(left=Side(style='thin', color='CBD5E1'), right=Side(style='thin', color='CBD5E1'), top=Side(style='thin', color='CBD5E1'), bottom=Side(style='thin', color='CBD5E1'))
 
-        # Cabeçalho Mestre
         ws_kpi.merge_cells('B2:J3')
         title = ws_kpi['B2']
         title.value = "📊 PAINEL ANALÍTICO DE CONFORMIDADE CONTRATUAL"
@@ -296,7 +404,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
             ]
             for celula, cor, texto in legendas:
                 ws[celula] = texto
-                ws[celula].fill = PatternFill(start_color=cor, end_color=cor, fill_type='solid')
+                ws[celula].fill = PatternFill(start_color=cor, end_color=cor, fill_type="solid")
                 ws[celula].font = Font(bold=True, size=9)
 
         for name in wb.sheetnames:
@@ -318,7 +426,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 for r_idx in range(linha_cabecalho + 1, ws.max_row + 1):
                     und_val = str(ws.cell(row=r_idx, column=col_unidade_idx).value).strip()
                     if und_val == '---':
-                        azul_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
+                        azul_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type="solid")
                         for c_idx in range(1, ws.max_column + 1):
                             cell = ws.cell(row=r_idx, column=c_idx)
                             cell.fill = azul_fill
@@ -333,12 +441,12 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                             var_preco_p = float(ws.cell(row=r_idx, column=11).value or 0)
                             
                             if und_val != und_prop_val and und_val != 'None':
-                                ws.cell(row=r_idx, column=3).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type='solid')
-                                ws.cell(row=r_idx, column=4).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type='solid')
-                            if delta_qtd > 0: ws.cell(row=r_idx, column=7).fill = PatternFill(start_color='E9D5FF', end_color='E9D5FF', fill_type='solid')
-                            if delta_preco > 0: ws.cell(row=r_idx, column=10).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type='solid')
-                            if var_preco_p > 0: ws.cell(row=r_idx, column=11).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type='solid')
-                            if var_preco_p < st.session_state.get('limiar_desconto', -0.25): ws.cell(row=r_idx, column=11).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type='solid')
+                                ws.cell(row=r_idx, column=3).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type="solid")
+                                ws.cell(row=r_idx, column=4).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type="solid")
+                            if delta_qtd > 0: ws.cell(row=r_idx, column=7).fill = PatternFill(start_color='E9D5FF', end_color='E9D5FF', fill_type="solid")
+                            if delta_preco > 0: ws.cell(row=r_idx, column=10).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                            if var_preco_p > 0: ws.cell(row=r_idx, column=11).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                            if var_preco_p < st.session_state.get('limiar_desconto', -0.25): ws.cell(row=r_idx, column=11).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
                         except Exception: pass
 
             formatos_coluna = {}
@@ -353,7 +461,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 col_idx = col[0].column
                 header_cell = ws.cell(row=linha_cabecalho, column=col_idx)
                 header_cell.font = Font(bold=True, color='FFFFFF')
-                header_cell.fill = PatternFill(start_color='1E293B', end_color='1E293B', fill_type='solid')
+                header_cell.fill = PatternFill(start_color='1E293B', end_color='1E293B', fill_type="solid")
                 header_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
                 
                 for cell in col:
