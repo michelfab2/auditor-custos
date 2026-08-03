@@ -731,10 +731,18 @@ if arquivo_base and arquivo_proposta:
             
             df_completo = df_auditoria.reset_index()
             
-            sobrepreco_filter = df_completo['Delta_Total'] > 0
-            inexequivel_filter = df_completo['Var_Preco_%'] < st.session_state.limiar_desconto
-            qtd_filter = df_completo['Delta_Qtd'] > 0
-            und_filter = df_completo['Und_Base'] != df_completo['Und_Prop']
+            # Filtros alinhados EXATAMENTE com as regras de cor do Excel
+            # Vermelho: Preço ou Total superior (> 0)
+            sobrepreco_filter = (df_completo['Delta_Preco'] > 0) | (df_completo['Delta_Total'] > 0) | (df_completo['Var_Preco_%'] > 0) | (df_completo['Var_Total_%'] > 0)
+            
+            # Laranja: Variação de Preço ou Total com desconto superior a 25%
+            inexequivel_filter = (df_completo['Var_Preco_%'] < st.session_state.limiar_desconto) | (df_completo['Var_Total_%'] < st.session_state.limiar_desconto)
+            
+            # Roxo: Qualquer diferença de quantidade (!= 0)
+            qtd_filter = df_completo['Delta_Qtd'] != 0
+            
+            # Amarelo: Unidade de medida diferente (ignorando maiúsculas/minúsculas)
+            und_filter = df_completo['Und_Base'].str.upper() != df_completo['Und_Prop'].str.upper()
             
             irregularidades = df_completo[sobrepreco_filter | qtd_filter | inexequivel_filter | und_filter]
             
