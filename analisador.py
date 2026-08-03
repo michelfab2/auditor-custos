@@ -391,6 +391,125 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         ws_kpi.column_dimensions['I'].width = 25
         ws_kpi.column_dimensions['J'].width = 3
 
+# ==========================================
+# 3. MOTOR EXPORTADOR EXCEL MULTI-ABA
+# ==========================================
+
+def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrados_base, df_nao_encontrados_prop, df_parsing, df_db_base, df_db_prop):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        
+        # 1. ESCRITA DAS ABAS PADRÃO
+        df_matriz.to_excel(writer, index=False, sheet_name='📋 Matriz Completa', startrow=8)
+        if not df_inconformidades.empty: df_inconformidades.to_excel(writer, index=False, sheet_name='🚨 Inconformidades', startrow=8)
+        else:
+            ws_inc = writer.book.create_sheet(title='🚨 Inconformidades')
+            ws_inc['A1'] = "Nenhuma inconformidade paramétrica detectada."
+            
+        df_nao_encontrados_base.to_excel(writer, index=False, sheet_name='📍 Não Encontrados na Base', startrow=1)
+        df_nao_encontrados_prop.to_excel(writer, index=False, sheet_name='📍 Omitidos na Proposta', startrow=1)
+        df_parsing.to_excel(writer, index=False, sheet_name='📝 Log de Erros de Parsing', startrow=1)
+        df_db_base.to_excel(writer, index=False, sheet_name='🗄️ DB Base', startrow=1)
+        df_db_prop.to_excel(writer, index=False, sheet_name='🗄️ DB Proposta', startrow=1)
+        
+        wb = writer.book
+
+        # ==========================================
+        # 2. CONSTRUÇÃO DO PAINEL DASHBOARD KPI (NATIVO)
+        # ==========================================
+        ws_kpi = wb.create_sheet('📊 Dashboard KPI', 0)
+        ws_kpi.sheet_view.showGridLines = False
+        
+        border_box = Border(left=Side(style='thin', color='CBD5E1'), right=Side(style='thin', color='CBD5E1'), top=Side(style='thin', color='CBD5E1'), bottom=Side(style='thin', color='CBD5E1'))
+
+        ws_kpi.merge_cells('B2:J3')
+        title = ws_kpi['B2']
+        title.value = "📊 PAINEL ANALÍTICO DE CONFORMIDADE CONTRATUAL"
+        title.font = Font(size=16, bold=True, color="FFFFFF")
+        title.fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+        title.alignment = Alignment(horizontal="center", vertical="center")
+
+        def desenhar_card(row, col, title, value, format_type='int'):
+            c_title = ws_kpi.cell(row=row, column=col)
+            c_title.value = title
+            c_title.font = Font(bold=True, color="FFFFFF", size=10)
+            c_title.fill = PatternFill(start_color="334155", end_color="334155", fill_type="solid")
+            c_title.alignment = Alignment(horizontal="center", vertical="center")
+            c_title.border = border_box
+            ws_kpi.cell(row=row, column=col+1).border = border_box
+            ws_kpi.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col+1)
+
+            c_val = ws_kpi.cell(row=row+1, column=col)
+            c_val.value = value
+            c_val.font = Font(size=14, bold=True, color="0F172A")
+            c_val.fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+            c_val.alignment = Alignment(horizontal="center", vertical="center")
+            c_val.border = border_box
+            
+            for r_adj in range(row+1, row+3):
+                for c_adj in range(col, col+2):
+                    ws_kpi.cell(row=r_adj, column=c_adj).border = border_box
+            ws_kpi.merge_cells(start_row=row+1, start_column=col, end_row=row+2, end_column=col+1)
+
+            if format_type == 'currency': c_val.number_format = '"R$" #,##0.00'
+            elif format_type == 'percent': c_val.number_format = '0.00%'
+            else: c_val.number_format = '#,##0'
+
+        desenhar_card(5, 2, "ITENS AUDITADOS", dash_data['total_insumos'], 'int')
+        desenhar_card(5, 5, "SALDO DO ORÇAMENTO", dash_data['total_proposta'], 'currency')
+        desenhar_card(5, 8, "TAXA DE CONFORMIDADE", dash_data['taxa_conformidade'], 'percent')
+
+        desenhar_card(9, 2, "RISCO SOBREPREÇO", dash_data['financeiro_sobrepreco'], 'currency')
+        desenhar_card(9, 5, "DESCONTO OCULTO (INEX)", dash_data['financeiro_inexequivel'], 'currency')
+        desenhar_card(9, 8, "MAIOR DESVIO ÚNICO", dash_data['max_desvio'], 'currency')
+
+        def desenhar_tabela(start_row, start_col, df, title_text):
+            if df.empty: return start_row
+            
+            t_cell = ws_kpi.cell(row=start_row, column=start_col)
+            t_cell.value = title_text
+            t_cell.font = Font(bold=True, size=11, color="1E3A8A")
+            ws_kpi.merge_cells(start_row=start_row, start_column=start_col, end_row=start_row, end_column=start_col + len(df.columns) - 1)
+
+            for c_idx, col_name in enumerate(df.columns):
+                cell = ws_kpi.cell(row=start_row+1, column=start_col+c_idx)
+                cell.value = col_name
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+                cell.border = border_box
+
+            for r_idx, row in enumerate(df.values):
+                for c_idx, val in enumerate(row):
+                    cell = ws_kpi.cell(row=start_row+2+r_idx, column=start_col+c_idx)
+                    cell.value = val
+                    cell.border = border_box
+                    cell.alignment = Alignment(vertical="center")
+
+                    col_name = df.columns[c_idx]
+                    if any(k in col_name for k in ['%', 'Variação', 'Desconto']): cell.number_format = '0.00%'
+                    elif any(k in col_name for k in ['R$', 'Impacto', 'Defasagem', 'Sobrepreço']): cell.number_format = '"R$" #,##0.00'
+                    elif isinstance(val, (int, float)): cell.number_format = '#,##0'
+                    
+            return start_row + len(df) + 4 
+
+        desenhar_tabela(14, 2, dash_data['count_graf'], "📌 OCORRÊNCIAS POR TIPOLOGIA")
+        desenhar_tabela(14, 6, dash_data['money_graf'], "💸 IMPACTO FINANCEIRO LÍQUIDO")
+
+        next_row = desenhar_tabela(23, 2, dash_data['top_sobre'], "🎯 FRENTE 1: TOP 5 IMPACTOS DE SOBREPREÇO")
+        desenhar_tabela(next_row, 2, dash_data['top_inex'], "🎯 FRENTE 2: TOP 5 RISCOS DE INEXEQUIBILIDADE")
+
+        ws_kpi.column_dimensions['A'].width = 3
+        ws_kpi.column_dimensions['B'].width = 15
+        ws_kpi.column_dimensions['C'].width = 32
+        ws_kpi.column_dimensions['D'].width = 4
+        ws_kpi.column_dimensions['E'].width = 20
+        ws_kpi.column_dimensions['F'].width = 25
+        ws_kpi.column_dimensions['G'].width = 4
+        ws_kpi.column_dimensions['H'].width = 18
+        ws_kpi.column_dimensions['I'].width = 25
+        ws_kpi.column_dimensions['J'].width = 3
+
         # ==========================================
         # 3. ESTILIZAÇÃO PADRÃO DAS ABAS DE DADOS
         # ==========================================
@@ -407,18 +526,15 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 ws[celula].fill = PatternFill(start_color=cor, end_color=cor, fill_type="solid")
                 ws[celula].font = Font(bold=True, size=9)
 
-        # Helper robusto para converter valor de célula em float
         def safe_float(v):
             if v is None: return 0.0
             if isinstance(v, (int, float)): return float(v)
             s = str(v).strip()
             if s in ('', '*', 'nan', 'None', '---'): return 0.0
-            # Normaliza padrão brasileiro
             if ',' in s and '.' in s:
                 s = s.replace('.', '').replace(',', '.')
             elif ',' in s:
                 s = s.replace(',', '.')
-            # Remove símbolos de moeda/percentual
             s = re.sub(r'[R$\s%]', '', s)
             try:
                 return float(s)
@@ -432,7 +548,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
 
         limiar_desconto = st.session_state.get('limiar_desconto', -0.25)
 
-        # Mapeamento de colunas por nome do cabeçalho (mais robusto que índices fixos)
         def mapear_colunas(ws, linha_cabecalho):
             mapa = {}
             for c_idx in range(1, ws.max_column + 1):
@@ -450,15 +565,12 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 linha_cabecalho = 9
             elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta',
                           '🗄️ DB Base', '🗄️ DB Proposta', '📝 Log de Erros de Parsing']:
-                # startrow=1 → cabeçalho na linha 2 (1-indexed)
                 linha_cabecalho = 2
             else:
                 linha_cabecalho = 1
 
-            # Mapeia colunas dinamicamente pelo nome do cabeçalho
             col_map = mapear_colunas(ws, linha_cabecalho)
 
-            # Aplica estilização apenas para as abas que têm colunas auditáveis
             is_matriz = name in ['📋 Matriz Completa', '🚨 Inconformidades']
             is_raw = name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta',
                               '🗄️ DB Base', '🗄️ DB Proposta']
@@ -474,9 +586,8 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
 
                 for r_idx in range(linha_cabecalho + 1, ws.max_row + 1):
                     und_base_val = safe_str(ws.cell(row=r_idx, column=col_und_base).value) if col_und_base else ''
-
-                    # Linha de composição pai (azul)
                     raw_und = ws.cell(row=r_idx, column=col_und_base).value if col_und_base else None
+                    
                     if safe_str(raw_und) == '---' or 'COMPOSIÇÃO' in safe_str(ws.cell(row=r_idx, column=2).value):
                         azul_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type="solid")
                         for c_idx in range(1, ws.max_column + 1):
@@ -492,41 +603,29 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                     delta_total = safe_float(ws.cell(row=r_idx, column=col_delta_total).value) if col_delta_total else 0.0
                     var_total = safe_float(ws.cell(row=r_idx, column=col_var_total).value) if col_var_total else 0.0
 
-                    # 🟨 AMARELO — Unidades de medida diferentes (normaliza case/whitespace)
                     if und_base_val and und_prop_val and und_base_val.upper() != und_prop_val.upper():
                         yellow_fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type="solid")
                         if col_und_base: ws.cell(row=r_idx, column=col_und_base).fill = yellow_fill
                         if col_und_prop: ws.cell(row=r_idx, column=col_und_prop).fill = yellow_fill
 
-                    # 🟪 ROXO — Quantidade DIFERENTE (não só majorada)
                     if delta_qtd != 0 and col_delta_qtd:
-                        ws.cell(row=r_idx, column=col_delta_qtd).fill = PatternFill(
-                            start_color='E9D5FF', end_color='E9D5FF', fill_type="solid")
+                        ws.cell(row=r_idx, column=col_delta_qtd).fill = PatternFill(start_color='E9D5FF', end_color='E9D5FF', fill_type="solid")
 
-                    # 🟥 VERMELHO — Sobrepreço (delta de preço ou total positivo)
                     if delta_preco > 0 and col_delta_preco:
-                        ws.cell(row=r_idx, column=col_delta_preco).fill = PatternFill(
-                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                        ws.cell(row=r_idx, column=col_delta_preco).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
                     if delta_total > 0 and col_delta_total:
-                        ws.cell(row=r_idx, column=col_delta_total).fill = PatternFill(
-                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                        ws.cell(row=r_idx, column=col_delta_total).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
                     if var_preco > 0 and col_var_preco:
-                        ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(
-                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                        ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
                     if var_total > 0 and col_var_total:
-                        ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(
-                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                        ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
 
-                    # 🟧 LARANJA — Desconto > 25% (inexequibilidade)
                     if var_preco < limiar_desconto and col_var_preco:
-                        ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(
-                            start_color='FDBA74', end_color='FDBA74', fill_type="solid")
+                        ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
                     if var_total < limiar_desconto and col_var_total:
-                        ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(
-                            start_color='FDBA74', end_color='FDBA74', fill_type="solid")
+                        ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
 
             elif is_raw:
-                # Apenas colore linhas de composição pai em azul
                 for r_idx in range(linha_cabecalho + 1, ws.max_row + 1):
                     desc_val = safe_str(ws.cell(row=r_idx, column=2).value)
                     if 'COMPOSIÇÃO' in desc_val:
@@ -536,7 +635,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                             cell.fill = azul_fill
                             cell.font = Font(bold=True, color='1E3A8A')
 
-            # Formatação de colunas numéricas (mantém)
             formatos_coluna = {}
             for col_idx in range(1, ws.max_column + 1):
                 nome_col = safe_str(ws.cell(row=linha_cabecalho, column=col_idx).value)
@@ -566,6 +664,9 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                     except Exception:
                         pass
                 ws.column_dimensions[col_letter].width = min(max(max_length + 3, 11), 70)
+
+    # O RETORNO DEVE FICAR AQUI, FORA DO BLOCO 'WITH'
+    return output.getvalue()
 
 # ==========================================
 # 4. INTERFACE GRÁFICA (UI - STREAMLIT)
