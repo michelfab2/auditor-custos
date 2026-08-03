@@ -730,6 +730,15 @@ if arquivo_base and arquivo_proposta:
             df_auditoria['Var_Total_%'] = np.where(df_auditoria['Total_Base'] > 0, (df_auditoria['Total_Prop'] / df_auditoria['Total_Base']) - 1, 0)
             
             df_completo = df_auditoria.reset_index()
+
+            # Limpeza de valores nulos para evitar erros nos filtros do dashboard
+            df_completo['Delta_Total'] = df_completo['Delta_Total'].fillna(0)
+            df_completo['Delta_Preco'] = df_completo['Delta_Preco'].fillna(0)
+            df_completo['Delta_Qtd'] = df_completo['Delta_Qtd'].fillna(0)
+            df_completo['Var_Preco_%'] = df_completo['Var_Preco_%'].fillna(0)
+            df_completo['Var_Total_%'] = df_completo['Var_Total_%'].fillna(0)
+            df_completo['Und_Base'] = df_completo['Und_Base'].fillna('').astype(str)
+            df_completo['Und_Prop'] = df_completo['Und_Prop'].fillna('').astype(str)
             
             # Filtros alinhados EXATAMENTE com as regras de cor do Excel
             # Vermelho: Preço ou Total superior (> 0)
@@ -757,14 +766,18 @@ if arquivo_base and arquivo_proposta:
             
             # Cálculo de Métricas Executivas
             total_insumos, total_irregularidades = len(df_completo), len(irregularidades)
-            total_base, total_proposta = df_completo['Total_Base'].sum(), df_completo['Total_Prop'].sum()
+            total_base, total_proposta = float(df_completo['Total_Base'].sum()), float(df_completo['Total_Prop'].sum())
             delta_total = total_proposta - total_base
             var_total_geral = (total_proposta / total_base - 1) if total_base > 0 else 0
             taxa_conformidade = ((total_insumos - total_irregularidades) / total_insumos) if total_insumos > 0 else 0
             
-            financeiro_sobrepreco = float(df_completo[sobrepreco_filter]['Delta_Total'].sum())
-            financeiro_qtd = float(df_completo[qtd_filter]['Delta_Total'].sum())
+            # Somatório financeiro apenas dos impactos positivos (sobrepreço real)
+            financeiro_sobrepreco = float(df_completo[df_completo['Delta_Total'] > 0]['Delta_Total'].sum())
+            # Impacto absoluto das diferenças de quantidade
+            financeiro_qtd = float(abs(df_completo[qtd_filter]['Delta_Total'].sum()))
+            # Impacto absoluto dos descontos extremos
             financeiro_inexequivel = float(abs(df_completo[inexequivel_filter]['Delta_Total'].sum()))
+            
             max_desvio_individual = float(df_completo['Delta_Total'].max()) if not df_completo.empty else 0.0
             
             sobreprecados, quantidades_alteradas = len(df_completo[sobrepreco_filter]), len(df_completo[qtd_filter])
@@ -781,6 +794,14 @@ if arquivo_base and arquivo_proposta:
                 df_top_inex_view = df_top_inex[['Insumo_Filho', 'Descricao_Filho', 'Delta_Total', 'Var_Preco_%']].copy()
                 df_top_inex_view.columns = ['Código', 'Descrição do Insumo', 'Defasagem (R$)', 'Desconto (%)']
             else: df_top_inex_view = pd.DataFrame()
+
+            dash_data_excel = {
+                'total_insumos': total_insumos, 'total_proposta': total_proposta, 'taxa_conformidade': taxa_conformidade,
+                'financeiro_sobrepreco': financeiro_sobrepreco, 'financeiro_inexequivel': financeiro_inexequivel, 'max_desvio': max_desvio_individual,
+                'count_graf': pd.DataFrame({'Tipologia de Erro': ['🟥 Sobrepreço', '🟪 Qtd. Majorada', '🟨 Fraude Métrica', '🟧 Inexequível'], 'Ocorrências': [sobreprecados, quantidades_alteradas, unidades_incompativeis, inexequiveis]}),
+                'money_graf': pd.DataFrame({'Tipologia Financeira': ['Sobrepreço Global', 'Majorização de Qtd.', 'Descontos Extremos'], 'Impacto (R$)': [financeiro_sobrepreco, financeiro_qtd, financeiro_inexequivel]}),
+                'top_sobre': df_top_sobre_view, 'top_inex': df_top_inex_view
+            }
 
             dash_data_excel = {
                 'total_insumos': total_insumos, 'total_proposta': total_proposta, 'taxa_conformidade': taxa_conformidade,
