@@ -812,16 +812,15 @@ if arquivo_base and arquivo_proposta:
             if not df_top_sobre.empty:
                 df_top_sobre_view = df_top_sobre[['Insumo_Filho', 'Descricao_Filho', 'Delta_Total', 'Var_Preco_%']].copy()
                 df_top_sobre_view.columns = ['Código', 'Descrição do Insumo', 'Sobrepreço (R$)', 'Variação (%)']
-            else: df_top_sobre_view = pd.DataFrame()
+            else: 
+                df_top_sobre_view = pd.DataFrame()
 
-            df_top_inex = df_completo[inexequivel_filter].sort_values(by='Delta_Total', ascending=True).head(5)
-            if not df_top_inex.empty:
             df_top_inex = df_completo[inexequivel_filter].sort_values(by='Delta_Total', ascending=True).head(5)
             if not df_top_inex.empty:
                 df_top_inex_view = df_top_inex[['Insumo_Filho', 'Descricao_Filho', 'Delta_Total', 'Var_Total_%']].copy()
                 df_top_inex_view.columns = ['Código', 'Descrição do Insumo', 'Defasagem (R$)', 'Variação Total (%)']
-            else: df_top_inex_view = pd.DataFrame()
-
+            else: 
+                df_top_inex_view = pd.DataFrame()
             dash_data_excel = {
                 'total_insumos': total_insumos, 'total_proposta': total_proposta, 'taxa_conformidade': taxa_conformidade,
                 'financeiro_sobrepreco': financeiro_sobrepreco, 'financeiro_inexequivel': financeiro_inexequivel, 'max_desvio': max_desvio_individual,
