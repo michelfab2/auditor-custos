@@ -396,10 +396,10 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         # ==========================================
         def injetar_legenda(ws):
             legendas = [
-                ('A1', 'FCA5A5', '🟥 VERMELHO: Sobrepreço (Valor superior à referência).'),
-                ('A2', 'E9D5FF', '🟪 ROXO: Quantidade Adulterada (Majorada).'),
-                ('A3', 'FDBA74', '🟧 LARANJA: Inexequibilidade (Desconto excessivo).'),
-                ('A4', 'FEF08A', '🟨 AMARELO: Fraude Métrica (Unidades incompatíveis).'),
+                ('A1', 'FCA5A5', '🟥 VERMELHO: Sobrepreço (Preço/Total da proposta superior à referência).'),
+                ('A2', 'E9D5FF', '🟪 ROXO: Quantidade diferente da referência.'),
+                ('A3', 'FDBA74', '🟧 LARANJA: Inexequibilidade (Desconto superior a 25%).'),
+                ('A4', 'FEF08A', '🟨 AMARELO: Fraude Métrica (Unidades de medida incompatíveis).'),
                 ('A7', 'DBEAFE', '🟦 AZUL CLARO: Composição Analítica Pai.')
             ]
             for celula, cor, texto in legendas:
@@ -407,54 +407,144 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 ws[celula].fill = PatternFill(start_color=cor, end_color=cor, fill_type="solid")
                 ws[celula].font = Font(bold=True, size=9)
 
+        # Helper robusto para converter valor de célula em float
+        def safe_float(v):
+            if v is None: return 0.0
+            if isinstance(v, (int, float)): return float(v)
+            s = str(v).strip()
+            if s in ('', '*', 'nan', 'None', '---'): return 0.0
+            # Normaliza padrão brasileiro
+            if ',' in s and '.' in s:
+                s = s.replace('.', '').replace(',', '.')
+            elif ',' in s:
+                s = s.replace(',', '.')
+            # Remove símbolos de moeda/percentual
+            s = re.sub(r'[R$\s%]', '', s)
+            try:
+                return float(s)
+            except ValueError:
+                return 0.0
+
+        def safe_str(v):
+            if v is None: return ''
+            s = str(v).strip()
+            return '' if s.lower() in ('nan', 'none', '---') else s
+
+        limiar_desconto = st.session_state.get('limiar_desconto', -0.25)
+
+        # Mapeamento de colunas por nome do cabeçalho (mais robusto que índices fixos)
+        def mapear_colunas(ws, linha_cabecalho):
+            mapa = {}
+            for c_idx in range(1, ws.max_column + 1):
+                nome = safe_str(ws.cell(row=linha_cabecalho, column=c_idx).value)
+                if nome:
+                    mapa[nome] = c_idx
+            return mapa
+
         for name in wb.sheetnames:
             if name == '📊 Dashboard KPI': continue
             ws = wb[name]
-            
+
             if name in ['📋 Matriz Completa', '🚨 Inconformidades']:
                 injetar_legenda(ws)
                 linha_cabecalho = 9
-                col_unidade_idx = 3
-            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🗄️ DB Base', '🗄️ DB Proposta']:
-                linha_cabecalho = 1
-                col_unidade_idx = 3
+            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta',
+                          '🗄️ DB Base', '🗄️ DB Proposta', '📝 Log de Erros de Parsing']:
+                # startrow=1 → cabeçalho na linha 2 (1-indexed)
+                linha_cabecalho = 2
             else:
                 linha_cabecalho = 1
-                col_unidade_idx = None
-            
-            if col_unidade_idx is not None:
+
+            # Mapeia colunas dinamicamente pelo nome do cabeçalho
+            col_map = mapear_colunas(ws, linha_cabecalho)
+
+            # Aplica estilização apenas para as abas que têm colunas auditáveis
+            is_matriz = name in ['📋 Matriz Completa', '🚨 Inconformidades']
+            is_raw = name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta',
+                              '🗄️ DB Base', '🗄️ DB Proposta']
+
+            if is_matriz:
+                col_und_base = col_map.get('Und_Base')
+                col_und_prop = col_map.get('Und_Prop')
+                col_delta_qtd = col_map.get('Delta_Qtd')
+                col_delta_preco = col_map.get('Delta_Preco')
+                col_var_preco = col_map.get('Var_Preco_%')
+                col_delta_total = col_map.get('Delta_Total')
+                col_var_total = col_map.get('Var_Total_%')
+
                 for r_idx in range(linha_cabecalho + 1, ws.max_row + 1):
-                    und_val = str(ws.cell(row=r_idx, column=col_unidade_idx).value).strip()
-                    if und_val == '---':
+                    und_base_val = safe_str(ws.cell(row=r_idx, column=col_und_base).value) if col_und_base else ''
+
+                    # Linha de composição pai (azul)
+                    raw_und = ws.cell(row=r_idx, column=col_und_base).value if col_und_base else None
+                    if safe_str(raw_und) == '---' or 'COMPOSIÇÃO' in safe_str(ws.cell(row=r_idx, column=2).value):
                         azul_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type="solid")
                         for c_idx in range(1, ws.max_column + 1):
                             cell = ws.cell(row=r_idx, column=c_idx)
                             cell.fill = azul_fill
                             cell.font = Font(bold=True, color='1E3A8A')
                         continue
-                    
-                    if name in ['📋 Matriz Completa', '🚨 Inconformidades']:
-                        try:
-                            und_prop_val = str(ws.cell(row=r_idx, column=4).value).strip()
-                            delta_qtd = float(ws.cell(row=r_idx, column=7).value or 0)
-                            delta_preco = float(ws.cell(row=r_idx, column=10).value or 0)
-                            var_preco_p = float(ws.cell(row=r_idx, column=11).value or 0)
-                            
-                            if und_val != und_prop_val and und_val != 'None':
-                                ws.cell(row=r_idx, column=3).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type="solid")
-                                ws.cell(row=r_idx, column=4).fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type="solid")
-                            if delta_qtd > 0: ws.cell(row=r_idx, column=7).fill = PatternFill(start_color='E9D5FF', end_color='E9D5FF', fill_type="solid")
-                            if delta_preco > 0: ws.cell(row=r_idx, column=10).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
-                            if var_preco_p > 0: ws.cell(row=r_idx, column=11).fill = PatternFill(start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
-                            if var_preco_p < st.session_state.get('limiar_desconto', -0.25): ws.cell(row=r_idx, column=11).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
-                        except Exception: pass
 
+                    und_prop_val = safe_str(ws.cell(row=r_idx, column=col_und_prop).value) if col_und_prop else ''
+                    delta_qtd = safe_float(ws.cell(row=r_idx, column=col_delta_qtd).value) if col_delta_qtd else 0.0
+                    delta_preco = safe_float(ws.cell(row=r_idx, column=col_delta_preco).value) if col_delta_preco else 0.0
+                    var_preco = safe_float(ws.cell(row=r_idx, column=col_var_preco).value) if col_var_preco else 0.0
+                    delta_total = safe_float(ws.cell(row=r_idx, column=col_delta_total).value) if col_delta_total else 0.0
+                    var_total = safe_float(ws.cell(row=r_idx, column=col_var_total).value) if col_var_total else 0.0
+
+                    # 🟨 AMARELO — Unidades de medida diferentes (normaliza case/whitespace)
+                    if und_base_val and und_prop_val and und_base_val.upper() != und_prop_val.upper():
+                        yellow_fill = PatternFill(start_color='FEF08A', end_color='FEF08A', fill_type="solid")
+                        if col_und_base: ws.cell(row=r_idx, column=col_und_base).fill = yellow_fill
+                        if col_und_prop: ws.cell(row=r_idx, column=col_und_prop).fill = yellow_fill
+
+                    # 🟪 ROXO — Quantidade DIFERENTE (não só majorada)
+                    if delta_qtd != 0 and col_delta_qtd:
+                        ws.cell(row=r_idx, column=col_delta_qtd).fill = PatternFill(
+                            start_color='E9D5FF', end_color='E9D5FF', fill_type="solid")
+
+                    # 🟥 VERMELHO — Sobrepreço (delta de preço ou total positivo)
+                    if delta_preco > 0 and col_delta_preco:
+                        ws.cell(row=r_idx, column=col_delta_preco).fill = PatternFill(
+                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                    if delta_total > 0 and col_delta_total:
+                        ws.cell(row=r_idx, column=col_delta_total).fill = PatternFill(
+                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                    if var_preco > 0 and col_var_preco:
+                        ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(
+                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+                    if var_total > 0 and col_var_total:
+                        ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(
+                            start_color='FCA5A5', end_color='FCA5A5', fill_type="solid")
+
+                    # 🟧 LARANJA — Desconto > 25% (inexequibilidade)
+                    if var_preco < limiar_desconto and col_var_preco:
+                        ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(
+                            start_color='FDBA74', end_color='FDBA74', fill_type="solid")
+                    if var_total < limiar_desconto and col_var_total:
+                        ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(
+                            start_color='FDBA74', end_color='FDBA74', fill_type="solid")
+
+            elif is_raw:
+                # Apenas colore linhas de composição pai em azul
+                for r_idx in range(linha_cabecalho + 1, ws.max_row + 1):
+                    desc_val = safe_str(ws.cell(row=r_idx, column=2).value)
+                    if 'COMPOSIÇÃO' in desc_val:
+                        azul_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type="solid")
+                        for c_idx in range(1, ws.max_column + 1):
+                            cell = ws.cell(row=r_idx, column=c_idx)
+                            cell.fill = azul_fill
+                            cell.font = Font(bold=True, color='1E3A8A')
+
+            # Formatação de colunas numéricas (mantém)
             formatos_coluna = {}
             for col_idx in range(1, ws.max_column + 1):
-                nome_col = str(ws.cell(row=linha_cabecalho, column=col_idx).value)
-                if any(k in nome_col for k in ['Preco', 'Preço', 'Total', 'Valor', 'Delta_Preco', 'Delta_Total']): formatos_coluna[col_idx] = '0.00%' if '%' in nome_col or 'Var_' in nome_col else '"R$" #,##0.00'
-                elif any(k in nome_col for k in ['Qtd', 'Quantidade', 'Delta_Qtd']): formatos_coluna[col_idx] = '#,##0.0000'
-            
+                nome_col = safe_str(ws.cell(row=linha_cabecalho, column=col_idx).value)
+                if any(k in nome_col for k in ['Preco', 'Preço', 'Total', 'Valor', 'Delta_Preco', 'Delta_Total']):
+                    formatos_coluna[col_idx] = '0.00%' if '%' in nome_col or 'Var_' in nome_col else '"R$" #,##0.00'
+                elif any(k in nome_col for k in ['Qtd', 'Quantidade', 'Delta_Qtd']):
+                    formatos_coluna[col_idx] = '#,##0.0000'
+
             for col in ws.columns:
                 max_length = 0
                 col_letter = get_column_letter(col[0].column)
@@ -463,18 +553,19 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                 header_cell.font = Font(bold=True, color='FFFFFF')
                 header_cell.fill = PatternFill(start_color='1E293B', end_color='1E293B', fill_type="solid")
                 header_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-                
+
                 for cell in col:
-                    if cell.row > linha_cabecalho and col_idx in formatos_coluna and isinstance(cell.value, (int, float, np.number)): cell.number_format = formatos_coluna[col_idx]
+                    if cell.row > linha_cabecalho and col_idx in formatos_coluna and isinstance(cell.value, (int, float, np.number)):
+                        cell.number_format = formatos_coluna[col_idx]
                     try:
                         if cell.value is not None:
                             val_str = str(cell.value)
-                            if col_idx in formatos_coluna and isinstance(cell.value, (int, float)): val_str = f"{cell.value * 100:.2f}%" if '%' in formatos_coluna[col_idx] else f"R$ {cell.value:,.2f}"
+                            if col_idx in formatos_coluna and isinstance(cell.value, (int, float)):
+                                val_str = f"{cell.value * 100:.2f}%" if '%' in formatos_coluna[col_idx] else f"R$ {cell.value:,.2f}"
                             max_length = max(max_length, len(val_str))
-                    except Exception: pass
+                    except Exception:
+                        pass
                 ws.column_dimensions[col_letter].width = min(max(max_length + 3, 11), 70)
-                
-    return output.getvalue()
 
 # ==========================================
 # 4. INTERFACE GRÁFICA (UI - STREAMLIT)
