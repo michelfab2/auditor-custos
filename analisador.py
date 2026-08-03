@@ -250,26 +250,51 @@ def transformar_hierarquico_raw(df):
 # ==========================================
 
 def estilizar_relatorio(row):
-    if row['Und_Base'] == '---':
+    if str(row.get('Und_Base', '')).strip() == '---':
         return ['background-color: #dbeafe; font-weight: bold; color: #1e3a8a;'] * len(row)
     estilos = [''] * len(row)
+    
+    def safe_float_ui(v):
+        if pd.isna(v) or v == '' or v == '*': return 0.0
+        if isinstance(v, (int, float)): return float(v)
+        s = str(v).strip()
+        if ',' in s and '.' in s: s = s.replace('.', '').replace(',', '.')
+        elif ',' in s: s = s.replace(',', '.')
+        s = re.sub(r'[R$\s%]', '', s)
+        try: return float(s)
+        except: return 0.0
+
     for i, col in enumerate(row.index):
         val = row[col]
-        if col in ['Und_Base', 'Und_Prop'] and str(row['Und_Base']).strip() != str(row['Und_Prop']).strip() and row['Und_Base'] != '---':
-            estilos[i] = 'background-color: #fef08a; color: #713f12; font-weight: bold;'
+        
+        # 🟨 AMARELO: Unidade de medida diferente (case insensitive)
+        if col in ['Und_Base', 'Und_Prop']:
+            und_b = str(row.get('Und_Base', '')).strip().upper()
+            und_p = str(row.get('Und_Prop', '')).strip().upper()
+            if und_b not in ['', 'NAN', '---'] and und_p not in ['', 'NAN', '---'] and und_b != und_p:
+                estilos[i] = 'background-color: #fef08a; color: #713f12; font-weight: bold;'
+                
         if pd.isna(val) or val == '': continue
-        try:
-            v = float(val)
-            if col == 'Delta_Qtd' and v > 0: estilos[i] = 'background-color: #e9d5ff; color: #6b21a8; font-weight: bold;'
-            elif col in ['Delta_Preco', 'Delta_Total'] and v > 0: estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
-            elif col in ['Var_Preco_%', 'Var_Total_%']:
-                if v > 0: estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
-                elif v < st.session_state.get('limiar_desconto', -0.25): estilos[i] = 'background-color: #fdba74; color: #7c2d12; font-weight: bold;'
-        except Exception: pass
+        v = safe_float_ui(val)
+        if v == 0 and col not in ['Delta_Qtd', 'Delta_Preco', 'Delta_Total', 'Var_Preco_%', 'Var_Total_%']: continue
+            
+        # 🟪 ROXO: Quantidade DIFERENTE (!= 0)
+        if col == 'Delta_Qtd' and v != 0: 
+            estilos[i] = 'background-color: #e9d5ff; color: #6b21a8; font-weight: bold;'
+        # 🟥 VERMELHO: Sobrepreço (> 0)
+        elif col in ['Delta_Preco', 'Delta_Total'] and v > 0: 
+            estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
+        elif col in ['Var_Preco_%', 'Var_Total_%']:
+            if v > 0: 
+                estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
+            # 🟧 LARANJA: Desconto > limiar
+            elif v < st.session_state.get('limiar_desconto', -0.25): 
+                estilos[i] = 'background-color: #fdba74; color: #7c2d12; font-weight: bold;'
     return estilos
 
 def estilizar_relatorio_raw(row):
-    if row['Unidade'] == '---': return ['background-color: #dbeafe; font-weight: bold; color: #1e3a8a;'] * len(row)
+    if str(row.get('Unidade', '')).strip() == '---' or 'COMPOSIÇÃO' in str(row.get('Descrição', '')): 
+        return ['background-color: #dbeafe; font-weight: bold; color: #1e3a8a;'] * len(row)
     return [''] * len(row)
 
 # ==========================================
@@ -791,8 +816,10 @@ if arquivo_base and arquivo_proposta:
 
             df_top_inex = df_completo[inexequivel_filter].sort_values(by='Delta_Total', ascending=True).head(5)
             if not df_top_inex.empty:
-                df_top_inex_view = df_top_inex[['Insumo_Filho', 'Descricao_Filho', 'Delta_Total', 'Var_Preco_%']].copy()
-                df_top_inex_view.columns = ['Código', 'Descrição do Insumo', 'Defasagem (R$)', 'Desconto (%)']
+            df_top_inex = df_completo[inexequivel_filter].sort_values(by='Delta_Total', ascending=True).head(5)
+            if not df_top_inex.empty:
+                df_top_inex_view = df_top_inex[['Insumo_Filho', 'Descricao_Filho', 'Delta_Total', 'Var_Total_%']].copy()
+                df_top_inex_view.columns = ['Código', 'Descrição do Insumo', 'Defasagem (R$)', 'Variação Total (%)']
             else: df_top_inex_view = pd.DataFrame()
 
             dash_data_excel = {
@@ -867,7 +894,8 @@ if arquivo_base and arquivo_proposta:
                     else: st.success("Nenhum sobrepreço mapeado.")
                 with p_col2:
                     st.markdown("##### 🔻 Top 5 Insumos com Maior Risco de Inexequibilidade")
-                    if not df_top_inex_view.empty: st.dataframe(df_top_inex_view.style.format({'Defasagem (R$)': 'R$ {:.2f}', 'Desconto (%)': '{:.2%}'}), hide_index=True, use_container_width=True)
+                    if not df_top_inex_view.empty: 
+                        st.dataframe(df_top_inex_view.style.format({'Defasagem (R$)': 'R$ {:.2f}', 'Variação Total (%)': '{:.2%}'}), hide_index=True, use_container_width=True)
                     else: st.info("Nenhuma anomalia de desconto extremo encontrada.")
                 
                 st.divider()
