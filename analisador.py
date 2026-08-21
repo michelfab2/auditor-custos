@@ -727,38 +727,39 @@ with col2: arquivo_proposta = st.file_uploader("2. Proposta da Empreiteira", typ
 if arquivo_base and arquivo_proposta:
     with st.spinner("Compilando inteligência analítica do painel de controle..."):
         
-     df_base = df_base_raw.copy()
+        df_base_raw, msg_base, check_base = carregar_orcafascio(arquivo_base.getvalue(), "Base")
+        df_prop_raw, msg_prop, check_prop = carregar_orcafascio(arquivo_proposta.getvalue(), "Proposta")
+        
+        if df_base_raw is not None and df_prop_raw is not None:
+            
+            df_base = df_base_raw.copy()
             df_prop = df_prop_raw.copy()
             
             # --- CORREÇÃO DO PRODUTO CARTESIANO (JOIN EXPLOSION) ---
-            # Criação de um ID único para cada repetição de insumo idêntico
             df_base['match_id'] = df_base.groupby(['Servico_Pai', 'Insumo_Filho', 'Descricao_Filho']).cumcount()
             df_prop['match_id'] = df_prop.groupby(['Servico_Pai', 'Insumo_Filho', 'Descricao_Filho']).cumcount()
             
-            # Novo índice blindado contra multiplicações indevidas
             chaves_index = ['Servico_Pai', 'Insumo_Filho', 'Descricao_Filho', 'match_id']
             
             df_base.set_index(chaves_index, inplace=True)
             df_prop.set_index(chaves_index, inplace=True)
             
-            # Cruzamento 1-para-1 exato
             df_auditoria = df_base.join(df_prop[['Und', 'Qtd', 'Preco_Unitario']], how='inner', rsuffix='_Prop')
             
-            # Proposta -> Base (Itens omitidos na base)
+            # Itens adicionais na proposta, não encontrados na base
             indices_nao_encontrados_base = set(df_prop.index) - set(df_base.index)
             if indices_nao_encontrados_base:
                 df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(chaves_index).index.isin(indices_nao_encontrados_base)].reset_index(drop=True).drop(columns=['match_id'], errors='ignore')
             else:
                 df_nao_encontrados_base = pd.DataFrame()
             
-            # Base -> Proposta (Itens omitidos na proposta)
+            # Itens omitidos na proposta, presentes apenas na base
             indices_nao_encontrados_prop = set(df_base.index) - set(df_prop.index)
             if indices_nao_encontrados_prop:
                 df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(chaves_index).index.isin(indices_nao_encontrados_prop)].reset_index(drop=True).drop(columns=['match_id'], errors='ignore')
             else:
                 df_nao_encontrados_prop = pd.DataFrame()
             
-            # Renomeando e calculando os deltas
             df_auditoria.rename(columns={'Und': 'Und_Base', 'Qtd': 'Qtd_Base', 'Preco_Unitario': 'Preco_Base', 'Und_Prop': 'Und_Prop', 'Qtd_Prop': 'Qtd_Prop', 'Preco_Unitario_Prop': 'Preco_Prop'}, inplace=True)
             
             df_auditoria['Total_Base'] = df_auditoria['Qtd_Base'] * df_auditoria['Preco_Base']
@@ -769,8 +770,8 @@ if arquivo_base and arquivo_proposta:
             df_auditoria['Var_Preco_%'] = np.where(df_auditoria['Preco_Base'] > 0, (df_auditoria['Preco_Prop'] / df_auditoria['Preco_Base']) - 1, 0)
             df_auditoria['Var_Total_%'] = np.where(df_auditoria['Total_Base'] > 0, (df_auditoria['Total_Prop'] / df_auditoria['Total_Base']) - 1, 0)
             
-            # Desfazendo o índice temporário para o resto da UI funcionar
-            df_completo = df_auditoria.reset_index().drop(columns=['match_id'])
+            df_completo = df_auditoria.reset_index().drop(columns=['match_id'], errors='ignore')
+            
             # Limpeza de valores nulos para evitar erros nos filtros do dashboard
             df_completo['Delta_Total'] = df_completo['Delta_Total'].fillna(0)
             df_completo['Delta_Preco'] = df_completo['Delta_Preco'].fillna(0)
