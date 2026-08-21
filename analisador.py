@@ -46,8 +46,8 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
         # Mapeamento padrão (SINAPI)
         col_cod, col_desc, col_und, col_quant, col_preco = 1, 3, 6, 7, 8
         
-          def parse_number(val):
-           if val is None or val == '' or val == '*':
+        def parse_number(val):
+            if val is None or val == '' or val == '*':
                 return 0.0
             if isinstance(val, (int, float)):
                 return float(val)
