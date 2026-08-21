@@ -6,6 +6,7 @@ import re
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import hashlib
+import streamlit.components.v1 as components
 
 # ==========================================
 # 0. CONFIGURAÇÕES E CACHE
@@ -38,12 +39,10 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
         is_sicro_section = False
         skip_items = False
         
-        # Mapeamento dinâmico SICRO3/IOPES
         sicro_col_quant = 4
         sicro_col_und = None
         sicro_col_preco = None
         
-        # Mapeamento padrão (SINAPI)
         col_cod, col_desc, col_und, col_quant, col_preco = 1, 3, 6, 7, 8
         
         def parse_number(val):
@@ -66,12 +65,10 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
             row_lower = [x.lower() for x in row_list]
             col0 = row_list[0].lower() if len(row_list) > 0 else ''
             
-            # 1. Ignorar Detalhamento ORSE
             if 'detalhamento de cálculo orse' in col0 or 'detalhamento de calculo orse' in col0:
                 in_orse_detail = True
                 continue
                 
-            # 2. Fim de Composição (Reseta Estados)
             if any('mo sem ls' in x for x in row_lower) or any('valor do bdi' in x for x in row_lower):
                 cod_pai_atual = None
                 is_sicro_section = False
@@ -79,7 +76,6 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                 skip_items = False
                 continue
                 
-            # 3. Novo Bloco Principal (1.1, 2.1, etc.)
             if re.match(r'^\d+\.\d+$', col0):
                 cod_pai_atual = None
                 is_sicro_section = False
@@ -87,7 +83,6 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                 skip_items = False
                 continue
                 
-            # 4. Sub-cabeçalhos SICRO3/SETOP/IOPES (Iniciam com B, C, D, E, F, G)
             if len(col0) == 1 and col0.upper() in ['B', 'C', 'D', 'E', 'F', 'G']:
                 is_sicro_section = True
                 skip_items = False
@@ -99,13 +94,12 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                     elif 'unidade' in val or val == 'un': sicro_col_und = i
                     elif 'preço unit' in val or 'preco unit' in val: sicro_col_preco = i
                     elif 'custo horário' in val or 'custo horario' in val:
-                        if sicro_col_preco is None: sicro_col_preco = i # Em Mão de Obra, Custo Horário é o Preço
+                        if sicro_col_preco is None: sicro_col_preco = i 
                 
                 if 'transporte' in ' '.join(row_lower):
-                    skip_items = True # Ignora itens de transporte (bloco F do SICRO3)
+                    skip_items = True 
                 continue
                 
-            # 5. Cabeçalhos Padrão (SINAPI, SEINFRA, Bases Próprias)
             if 'código' in row_lower or 'codigo' in row_lower:
                 is_sicro_section = False
                 skip_items = False
@@ -117,7 +111,6 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                     elif any(p in val for p in ['valor unit', 'preço unit', 'preco unit']): col_preco = i
                 continue
                 
-            # 6. Itens e Composições
             if col0 in ['insumo', 'composição auxiliar', 'composicao auxiliar', 'item', 'composição', 'composicao']:
                 if in_orse_detail or skip_items: continue
                 if col_cod < len(row_list):
@@ -126,14 +119,12 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                     
                     desc_item = row_list[col_desc] if col_desc is not None and col_desc < len(row_list) else ""
                     
-                    # Se não tem pai definido e é composição, vira o Pai
                     if cod_pai_atual is None and col0 in ['composição', 'composicao']:
                         cod_pai_atual = cod_item
                         desc_pai_atual = desc_item
                         continue
                     else:
-                        # É um Filho
-                        if cod_pai_atual is None: continue # Órfão, ignora
+                        if cod_pai_atual is None: continue 
                         
                         if is_sicro_section:
                             qtd_idx = sicro_col_quant if sicro_col_quant is not None else 4
@@ -145,12 +136,11 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                             if und_idx is not None and und_idx < len(row_list) and row_list[und_idx] != '*':
                                 und_item = row_list[und_idx].upper()
                             else:
-                                und_item = 'H' # Default para Mão de Obra SICRO3/IOPES
+                                und_item = 'H' 
                                 
                             if preco_idx is not None and preco_idx < len(row_list) and row_list[preco_idx] != '*':
                                 preco_valor = parse_number(row_list[preco_idx])
                             else:
-                                # Fallback Definitivo: Procura de trás pra frente o Custo Total (último) e Preço Unitário (penúltimo)
                                 preco_valor = 0.0
                                 last_num_idx = -1
                                 for i in range(len(row_list) - 1, qtd_idx, -1):
@@ -162,7 +152,6 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                                             break
                                 
                                 if last_num_idx != -1:
-                                    # Tenta pegar o número imediatamente antes do Total (Preço Unitário)
                                     if last_num_idx - 1 >= 0:
                                         val_preco = row_list[last_num_idx - 1]
                                         if val_preco != '*' and val_preco != '':
@@ -170,11 +159,9 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                                             if parsed_preco > 0:
                                                 preco_valor = parsed_preco
                                     
-                                    # Se não achou preço unitário separado, usa o próprio Total
                                     if preco_valor == 0.0:
                                         preco_valor = parse_number(row_list[last_num_idx])
                         else:
-                            # Padrão SINAPI
                             und_item = row_list[col_und].upper() if col_und < len(row_list) else ""
                             qtd_valor = parse_number(row_list[col_quant]) if col_quant < len(row_list) else 0.0
                             preco_valor = parse_number(row_list[col_preco]) if col_preco < len(row_list) else 0.0
@@ -267,7 +254,6 @@ def estilizar_relatorio(row):
     for i, col in enumerate(row.index):
         val = row[col]
         
-        # 🟨 AMARELO: Unidade de medida diferente (case insensitive)
         if col in ['Und_Base', 'Und_Prop']:
             und_b = str(row.get('Und_Base', '')).strip().upper()
             und_p = str(row.get('Und_Prop', '')).strip().upper()
@@ -278,16 +264,13 @@ def estilizar_relatorio(row):
         v = safe_float_ui(val)
         if v == 0 and col not in ['Delta_Qtd', 'Delta_Preco', 'Delta_Total', 'Var_Preco_%', 'Var_Total_%']: continue
             
-        # 🟪 ROXO: Quantidade DIFERENTE (!= 0)
         if col == 'Delta_Qtd' and v != 0: 
             estilos[i] = 'background-color: #e9d5ff; color: #6b21a8; font-weight: bold;'
-        # 🟥 VERMELHO: Sobrepreço (> 0)
         elif col in ['Delta_Preco', 'Delta_Total'] and v > 0: 
             estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
         elif col in ['Var_Preco_%', 'Var_Total_%']:
             if v > 0: 
                 estilos[i] = 'background-color: #fca5a5; color: #7f1d1d; font-weight: bold;'
-            # 🟧 LARANJA: Desconto > limiar
             elif v < st.session_state.get('limiar_desconto', -0.25): 
                 estilos[i] = 'background-color: #fdba74; color: #7c2d12; font-weight: bold;'
     return estilos
@@ -305,7 +288,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         
-        # 1. ESCRITA DAS ABAS PADRÃO
         df_matriz.to_excel(writer, index=False, sheet_name='📋 Matriz Completa', startrow=8)
         if not df_inconformidades.empty: df_inconformidades.to_excel(writer, index=False, sheet_name='🚨 Inconformidades', startrow=8)
         else:
@@ -319,10 +301,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         df_db_prop.to_excel(writer, index=False, sheet_name='🗄️ DB Proposta', startrow=1)
         
         wb = writer.book
-
-        # ==========================================
-        # 2. CONSTRUÇÃO DO PAINEL DASHBOARD KPI (NATIVO)
-        # ==========================================
         ws_kpi = wb.create_sheet('📊 Dashboard KPI', 0)
         ws_kpi.sheet_view.showGridLines = False
         
@@ -416,128 +394,6 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
         ws_kpi.column_dimensions['I'].width = 25
         ws_kpi.column_dimensions['J'].width = 3
 
-# ==========================================
-# 3. MOTOR EXPORTADOR EXCEL MULTI-ABA
-# ==========================================
-
-def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrados_base, df_nao_encontrados_prop, df_parsing, df_db_base, df_db_prop):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        
-        # 1. ESCRITA DAS ABAS PADRÃO
-        df_matriz.to_excel(writer, index=False, sheet_name='📋 Matriz Completa', startrow=8)
-        if not df_inconformidades.empty: df_inconformidades.to_excel(writer, index=False, sheet_name='🚨 Inconformidades', startrow=8)
-        else:
-            ws_inc = writer.book.create_sheet(title='🚨 Inconformidades')
-            ws_inc['A1'] = "Nenhuma inconformidade paramétrica detectada."
-            
-        df_nao_encontrados_base.to_excel(writer, index=False, sheet_name='📍 Não Encontrados na Base', startrow=1)
-        df_nao_encontrados_prop.to_excel(writer, index=False, sheet_name='📍 Omitidos na Proposta', startrow=1)
-        df_parsing.to_excel(writer, index=False, sheet_name='📝 Log de Erros de Parsing', startrow=1)
-        df_db_base.to_excel(writer, index=False, sheet_name='🗄️ DB Base', startrow=1)
-        df_db_prop.to_excel(writer, index=False, sheet_name='🗄️ DB Proposta', startrow=1)
-        
-        wb = writer.book
-
-        # ==========================================
-        # 2. CONSTRUÇÃO DO PAINEL DASHBOARD KPI (NATIVO)
-        # ==========================================
-        ws_kpi = wb.create_sheet('📊 Dashboard KPI', 0)
-        ws_kpi.sheet_view.showGridLines = False
-        
-        border_box = Border(left=Side(style='thin', color='CBD5E1'), right=Side(style='thin', color='CBD5E1'), top=Side(style='thin', color='CBD5E1'), bottom=Side(style='thin', color='CBD5E1'))
-
-        ws_kpi.merge_cells('B2:J3')
-        title = ws_kpi['B2']
-        title.value = "📊 PAINEL ANALÍTICO DE CONFORMIDADE CONTRATUAL"
-        title.font = Font(size=16, bold=True, color="FFFFFF")
-        title.fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
-        title.alignment = Alignment(horizontal="center", vertical="center")
-
-        def desenhar_card(row, col, title, value, format_type='int'):
-            c_title = ws_kpi.cell(row=row, column=col)
-            c_title.value = title
-            c_title.font = Font(bold=True, color="FFFFFF", size=10)
-            c_title.fill = PatternFill(start_color="334155", end_color="334155", fill_type="solid")
-            c_title.alignment = Alignment(horizontal="center", vertical="center")
-            c_title.border = border_box
-            ws_kpi.cell(row=row, column=col+1).border = border_box
-            ws_kpi.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col+1)
-
-            c_val = ws_kpi.cell(row=row+1, column=col)
-            c_val.value = value
-            c_val.font = Font(size=14, bold=True, color="0F172A")
-            c_val.fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
-            c_val.alignment = Alignment(horizontal="center", vertical="center")
-            c_val.border = border_box
-            
-            for r_adj in range(row+1, row+3):
-                for c_adj in range(col, col+2):
-                    ws_kpi.cell(row=r_adj, column=c_adj).border = border_box
-            ws_kpi.merge_cells(start_row=row+1, start_column=col, end_row=row+2, end_column=col+1)
-
-            if format_type == 'currency': c_val.number_format = '"R$" #,##0.00'
-            elif format_type == 'percent': c_val.number_format = '0.00%'
-            else: c_val.number_format = '#,##0'
-
-        desenhar_card(5, 2, "ITENS AUDITADOS", dash_data['total_insumos'], 'int')
-        desenhar_card(5, 5, "SALDO DO ORÇAMENTO", dash_data['total_proposta'], 'currency')
-        desenhar_card(5, 8, "TAXA DE CONFORMIDADE", dash_data['taxa_conformidade'], 'percent')
-
-        desenhar_card(9, 2, "RISCO SOBREPREÇO", dash_data['financeiro_sobrepreco'], 'currency')
-        desenhar_card(9, 5, "DESCONTO OCULTO (INEX)", dash_data['financeiro_inexequivel'], 'currency')
-        desenhar_card(9, 8, "MAIOR DESVIO ÚNICO", dash_data['max_desvio'], 'currency')
-
-        def desenhar_tabela(start_row, start_col, df, title_text):
-            if df.empty: return start_row
-            
-            t_cell = ws_kpi.cell(row=start_row, column=start_col)
-            t_cell.value = title_text
-            t_cell.font = Font(bold=True, size=11, color="1E3A8A")
-            ws_kpi.merge_cells(start_row=start_row, start_column=start_col, end_row=start_row, end_column=start_col + len(df.columns) - 1)
-
-            for c_idx, col_name in enumerate(df.columns):
-                cell = ws_kpi.cell(row=start_row+1, column=start_col+c_idx)
-                cell.value = col_name
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
-                cell.alignment = Alignment(horizontal="center")
-                cell.border = border_box
-
-            for r_idx, row in enumerate(df.values):
-                for c_idx, val in enumerate(row):
-                    cell = ws_kpi.cell(row=start_row+2+r_idx, column=start_col+c_idx)
-                    cell.value = val
-                    cell.border = border_box
-                    cell.alignment = Alignment(vertical="center")
-
-                    col_name = df.columns[c_idx]
-                    if any(k in col_name for k in ['%', 'Variação', 'Desconto']): cell.number_format = '0.00%'
-                    elif any(k in col_name for k in ['R$', 'Impacto', 'Defasagem', 'Sobrepreço']): cell.number_format = '"R$" #,##0.00'
-                    elif isinstance(val, (int, float)): cell.number_format = '#,##0'
-                    
-            return start_row + len(df) + 4 
-
-        desenhar_tabela(14, 2, dash_data['count_graf'], "📌 OCORRÊNCIAS POR TIPOLOGIA")
-        desenhar_tabela(14, 6, dash_data['money_graf'], "💸 IMPACTO FINANCEIRO LÍQUIDO")
-
-        next_row = desenhar_tabela(23, 2, dash_data['top_sobre'], "🎯 FRENTE 1: TOP 5 IMPACTOS DE SOBREPREÇO")
-        desenhar_tabela(next_row, 2, dash_data['top_inex'], "🎯 FRENTE 2: TOP 5 RISCOS DE INEXEQUIBILIDADE")
-
-        ws_kpi.column_dimensions['A'].width = 3
-        ws_kpi.column_dimensions['B'].width = 15
-        ws_kpi.column_dimensions['C'].width = 32
-        ws_kpi.column_dimensions['D'].width = 4
-        ws_kpi.column_dimensions['E'].width = 20
-        ws_kpi.column_dimensions['F'].width = 25
-        ws_kpi.column_dimensions['G'].width = 4
-        ws_kpi.column_dimensions['H'].width = 18
-        ws_kpi.column_dimensions['I'].width = 25
-        ws_kpi.column_dimensions['J'].width = 3
-
-        # ==========================================
-        # 3. ESTILIZAÇÃO PADRÃO DAS ABAS DE DADOS
-        # ==========================================
         def injetar_legenda(ws):
             legendas = [
                 ('A1', 'FCA5A5', '🟥 VERMELHO: Sobrepreço (Preço/Total da proposta superior à referência).'),
@@ -690,12 +546,19 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                         pass
                 ws.column_dimensions[col_letter].width = min(max(max_length + 3, 11), 70)
 
-    # O RETORNO DEVE FICAR AQUI, FORA DO BLOCO 'WITH'
     return output.getvalue()
 
 # ==========================================
 # 4. INTERFACE GRÁFICA (UI - STREAMLIT)
 # ==========================================
+
+# Função mágica para impedir que o app trave
+def safe_render_styler(styler, height=600):
+    try:
+        st.dataframe(styler, height=height, use_container_width=True)
+    except Exception:
+        st.warning("Renderização nativa falhou (provável bug Python 3.14). Exibindo via HTML alternativo...")
+        components.html(styler.to_html(), height=height+50, scrolling=True)
 
 if 'limiar_desconto' not in st.session_state:
     st.session_state.limiar_desconto = -0.25
@@ -737,11 +600,9 @@ if arquivo_base and arquivo_proposta:
             
             df_auditoria = df_base.join(df_prop[['Und', 'Qtd', 'Preco_Unitario']], how='inner', rsuffix='_Prop')
             
-            # Proposta -> Base (Itens adicionais na proposta, não encontrados na base)
             indices_nao_encontrados_base = set(df_prop.index) - set(df_base.index)
             df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_base)].reset_index(drop=True) if indices_nao_encontrados_base else pd.DataFrame()
             
-            # Base -> Proposta (Itens omitidos na proposta, presentes apenas na base)
             indices_nao_encontrados_prop = set(df_base.index) - set(df_prop.index)
             df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_prop)].reset_index(drop=True) if indices_nao_encontrados_prop else pd.DataFrame()
             
@@ -756,7 +617,6 @@ if arquivo_base and arquivo_proposta:
             
             df_completo = df_auditoria.reset_index()
 
-            # Limpeza de valores nulos para evitar erros nos filtros do dashboard
             df_completo['Delta_Total'] = df_completo['Delta_Total'].fillna(0)
             df_completo['Delta_Preco'] = df_completo['Delta_Preco'].fillna(0)
             df_completo['Delta_Qtd'] = df_completo['Delta_Qtd'].fillna(0)
@@ -765,17 +625,9 @@ if arquivo_base and arquivo_proposta:
             df_completo['Und_Base'] = df_completo['Und_Base'].fillna('').astype(str)
             df_completo['Und_Prop'] = df_completo['Und_Prop'].fillna('').astype(str)
             
-            # Filtros alinhados EXATAMENTE com as regras de cor do Excel
-            # Vermelho: Preço ou Total superior (> 0)
             sobrepreco_filter = (df_completo['Delta_Preco'] > 0) | (df_completo['Delta_Total'] > 0) | (df_completo['Var_Preco_%'] > 0) | (df_completo['Var_Total_%'] > 0)
-            
-            # Laranja: Variação de Preço ou Total com desconto superior a 25%
             inexequivel_filter = (df_completo['Var_Preco_%'] < st.session_state.limiar_desconto) | (df_completo['Var_Total_%'] < st.session_state.limiar_desconto)
-            
-            # Roxo: Qualquer diferença de quantidade (!= 0)
             qtd_filter = df_completo['Delta_Qtd'] != 0
-            
-            # Amarelo: Unidade de medida diferente (ignorando maiúsculas/minúsculas)
             und_filter = df_completo['Und_Base'].str.upper() != df_completo['Und_Prop'].str.upper()
             
             irregularidades = df_completo[sobrepreco_filter | qtd_filter | inexequivel_filter | und_filter]
@@ -789,18 +641,14 @@ if arquivo_base and arquivo_proposta:
             df_visual_db_base = transformar_hierarquico_raw(df_base_raw)
             df_visual_db_prop = transformar_hierarquico_raw(df_prop_raw)
             
-            # Cálculo de Métricas Executivas
             total_insumos, total_irregularidades = len(df_completo), len(irregularidades)
             total_base, total_proposta = float(df_completo['Total_Base'].sum()), float(df_completo['Total_Prop'].sum())
             delta_total = total_proposta - total_base
             var_total_geral = (total_proposta / total_base - 1) if total_base > 0 else 0
             taxa_conformidade = ((total_insumos - total_irregularidades) / total_insumos) if total_insumos > 0 else 0
             
-            # Somatório financeiro apenas dos impactos positivos (sobrepreço real)
             financeiro_sobrepreco = float(df_completo[df_completo['Delta_Total'] > 0]['Delta_Total'].sum())
-            # Impacto absoluto das diferenças de quantidade
             financeiro_qtd = float(abs(df_completo[qtd_filter]['Delta_Total'].sum()))
-            # Impacto absoluto dos descontos extremos
             financeiro_inexequivel = float(abs(df_completo[inexequivel_filter]['Delta_Total'].sum()))
             
             max_desvio_individual = float(df_completo['Delta_Total'].max()) if not df_completo.empty else 0.0
@@ -821,14 +669,7 @@ if arquivo_base and arquivo_proposta:
                 df_top_inex_view.columns = ['Código', 'Descrição do Insumo', 'Defasagem (R$)', 'Variação Total (%)']
             else: 
                 df_top_inex_view = pd.DataFrame()
-            dash_data_excel = {
-                'total_insumos': total_insumos, 'total_proposta': total_proposta, 'taxa_conformidade': taxa_conformidade,
-                'financeiro_sobrepreco': financeiro_sobrepreco, 'financeiro_inexequivel': financeiro_inexequivel, 'max_desvio': max_desvio_individual,
-                'count_graf': pd.DataFrame({'Tipologia de Erro': ['🟥 Sobrepreço', '🟪 Qtd. Majorada', '🟨 Fraude Métrica', '🟧 Inexequível'], 'Ocorrências': [sobreprecados, quantidades_alteradas, unidades_incompativeis, inexequiveis]}),
-                'money_graf': pd.DataFrame({'Tipologia Financeira': ['Sobrepreço Global', 'Majorização de Qtd.', 'Descontos Extremos'], 'Impacto (R$)': [financeiro_sobrepreco, financeiro_qtd, financeiro_inexequivel]}),
-                'top_sobre': df_top_sobre_view, 'top_inex': df_top_inex_view
-            }
-
+                
             dash_data_excel = {
                 'total_insumos': total_insumos, 'total_proposta': total_proposta, 'taxa_conformidade': taxa_conformidade,
                 'financeiro_sobrepreco': financeiro_sobrepreco, 'financeiro_inexequivel': financeiro_inexequivel, 'max_desvio': max_desvio_individual,
@@ -889,12 +730,13 @@ if arquivo_base and arquivo_proposta:
                 p_col1, p_col2 = st.columns(2)
                 with p_col1:
                     st.markdown("##### 🔺 Top 5 Insumos com Maior Impacto de Sobrepreço")
-                    if not df_top_sobre_view.empty: st.dataframe(df_top_sobre_view.style.format({'Sobrepreço (R$)': 'R$ {:.2f}', 'Variação (%)': '{:+.2%}'}), hide_index=True, use_container_width=True)
+                    if not df_top_sobre_view.empty: 
+                        safe_render_styler(df_top_sobre_view.style.format({'Sobrepreço (R$)': 'R$ {:.2f}', 'Variação (%)': '{:+.2%}'}), height=250)
                     else: st.success("Nenhum sobrepreço mapeado.")
                 with p_col2:
                     st.markdown("##### 🔻 Top 5 Insumos com Maior Risco de Inexequibilidade")
                     if not df_top_inex_view.empty: 
-                        st.dataframe(df_top_inex_view.style.format({'Defasagem (R$)': 'R$ {:.2f}', 'Variação Total (%)': '{:.2%}'}), hide_index=True, use_container_width=True)
+                        safe_render_styler(df_top_inex_view.style.format({'Defasagem (R$)': 'R$ {:.2f}', 'Variação Total (%)': '{:.2%}'}), height=250)
                     else: st.info("Nenhuma anomalia de desconto extremo encontrada.")
                 
                 st.divider()
@@ -902,17 +744,34 @@ if arquivo_base and arquivo_proposta:
             
             with tab2:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_matriz')
-                st.dataframe(styler_ui_completo, height=600, use_container_width=True)
+                safe_render_styler(styler_ui_completo, height=600)
+
             with tab3:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_erro')
-                if styler_ui_erros is not None: st.dataframe(styler_ui_erros, height=500, use_container_width=True)
-                else: st.success("✅ Tudo em conformidade!")
+                if styler_ui_erros is not None: 
+                    safe_render_styler(styler_ui_erros, height=500)
+                else: 
+                    st.success("✅ Tudo em conformidade!")
+
             with tab4:
-                if styler_ui_ne_base is not None: st.dataframe(styler_ui_ne_base, height=500, use_container_width=True)
-                else: st.success("✅ Alinhamento Completo! Todos os insumos da proposta existem na base.")
+                if styler_ui_ne_base is not None: 
+                    safe_render_styler(styler_ui_ne_base, height=500)
+                else: 
+                    st.success("✅ Alinhamento Completo! Todos os insumos da proposta existem na base.")
+
             with tab5:
-                if styler_ui_ne_prop is not None: st.dataframe(styler_ui_ne_prop, height=500, use_container_width=True)
-                else: st.success("✅ Alinhamento Completo! A proposta contempla 100% dos itens presentes na base de referência.")
-            with tab6: st.success("✅ Zero erros estruturais identificados.")
-            with tab7: st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
-            with tab8: st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
+                if styler_ui_ne_prop is not None: 
+                    safe_render_styler(styler_ui_ne_prop, height=500)
+                else: 
+                    st.success("✅ Alinhamento Completo! A proposta contempla 100% dos itens presentes na base de referência.")
+
+            with tab6: 
+                st.success("✅ Zero erros estruturais identificados.")
+
+            with tab7: 
+                safe_render_styler(styler_ui_db_base, height=600)
+
+            with tab8: 
+                safe_render_styler(styler_ui_db_prop, height=600)
+        else:
+            st.error(f"Erro ao carregar arquivos:\n- {msg_base}\n- {msg_prop}")
