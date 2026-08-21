@@ -11,41 +11,36 @@ import hashlib
 # 0. CONFIGURAÇÕES E CACHE
 # ==========================================
 
-st.set_page_config(page_title="Auditoria PRO", layout="wide", page_icon="🛡️")
-
-MAX_FILE_SIZE_MB = 50
-CACHE_TTL = 3600
-
-# ==========================================
-# 1. PARSERS E TRANSFORMADORES HIERÁRQUICOS
-# ==========================================
-
 @st.cache_data(ttl=CACHE_TTL)
 def carregar_orcafascio(arquivo_bytes, nome_arquivo):
     try:
         tamanho_mb = len(arquivo_bytes) / (1024 * 1024)
         if tamanho_mb > MAX_FILE_SIZE_MB:
             return None, f"Arquivo {nome_arquivo} excede {MAX_FILE_SIZE_MB}MB ({tamanho_mb:.1f}MB)", None
-        
+
         df_raw = pd.read_excel(io.BytesIO(arquivo_bytes), header=None)
-        
+
         dados = []
-        log_erros_parse = []
+        log_erros_parse = []          # 🔧 CORREÇÃO 6: log agora é alimentado
         cod_pai_atual, desc_pai_atual = None, ""
         ordem_sequencial = 0
-        
+
         in_orse_detail = False
         is_sicro_section = False
         skip_items = False
-        
-        # Mapeamento dinâmico SICRO3/IOPES
-        sicro_col_quant = 4
+
+        # 🔧 CORREÇÃO 1: o mapeamento SICRO/SETOP agora inclui código e descrição.
+        # Default = layout SETOP F/G/H (col1=Banco, col2=Código, col3=Descrição).
+        # Seções A/B trazem Código na col1 — o scan dinâmico do cabeçalho resolve ambos.
+        sicro_col_quant = 8
         sicro_col_und = None
         sicro_col_preco = None
-        
-        # Mapeamento padrão (SINAPI)
+        sicro_col_cod = 2
+        sicro_col_desc = 3
+
+        # Mapeamento padrão (SINAPI, SEINFRA, ORSE flat, FDE, bases próprias)
         col_cod, col_desc, col_und, col_quant, col_preco = 1, 3, 6, 7, 8
-        
+
         def parse_number(val):
             if val is None or val == '' or val == '*':
                 return 0.0
@@ -54,35 +49,40 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
             s = str(val).strip()
             if s == '':
                 return 0.0
-            # Remove espaços, R$, %
             s = re.sub(r'[R$\s%]', '', s)
             if ',' in s and '.' in s:
-                # Detecta qual é o decimal pelo ÚLTIMO separador
                 if s.rfind(',') < s.rfind('.'):
-                    # Padrão BR: vírgula = milhar, ponto = decimal
-                    s = s.replace(',', '')
+                    s = s.replace(',', '')          # BR: vírgula = milhar
                 else:
-                    # Padrão EU: ponto = milhar, vírgula = decimal
-                    s = s.replace('.', '').replace(',', '.')
+                    s = s.replace('.', '').replace(',', '.')  # EU: ponto = milhar
             elif ',' in s:
-                # Só vírgula → assume decimal (padrão BR/EU)
                 s = s.replace(',', '.')
             try:
                 return float(s)
             except ValueError:
                 return 0.0
 
+        # 🔧 CORREÇÃO 2: tipos de linha aceitos, normalizados em minúsculas
+        # (col0 já chega lowercased; 'atividade auxiliar' era descartada antes)
+        tipos_validos = {
+            'insumo', 'composição', 'composicao',
+            'composição auxiliar', 'composicao auxiliar',
+            'atividade auxiliar', 'atividade',
+            'serviço auxiliar', 'servico auxiliar',
+            'equipamento', 'item'
+        }
+
         for idx, row in df_raw.iterrows():
             row_list = [str(x).strip() if pd.notna(x) else '' for x in row]
             row_lower = [x.lower() for x in row_list]
             col0 = row_list[0].lower() if len(row_list) > 0 else ''
-            
-                       # 1. Ignorar Detalhamento ORSE
+
+            # 1. Ignorar Detalhamento ORSE
             if 'detalhamento de cálculo orse' in col0 or 'detalhamento de calculo orse' in col0:
                 in_orse_detail = True
                 continue
-                
-            # 2. Fim de Composição (Reseta Estados)
+
+            # 2. Fim de composição (reseta todos os estados)
             if any('mo sem ls' in x for x in row_lower) or any('valor do bdi' in x for x in row_lower):
                 cod_pai_atual = None
                 is_sicro_section = False
@@ -90,116 +90,147 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                 skip_items = False
                 continue
 
-            # 4. Sub-cabeçalhos SICRO3/SETOP/IOPES (Iniciam com A, B, C, D, E, F, G)
-            if len(col0) == 1 and col0.upper() in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
+            # 3. Sub-cabeçalhos SICRO3/SETOP/IOPES
+            # 🔧 CORREÇÃO 4: 'H' incluído — antes caía no handler SINAPI,
+            # resetava is_sicro_section e corrompia col_cod/col_preco do restante do arquivo
+            if len(col0) == 1 and col0.upper() in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']:
                 is_sicro_section = True
                 skip_items = False
-                sicro_col_quant = 4
+                sicro_col_quant = 8
                 sicro_col_und = None
                 sicro_col_preco = None
+                sicro_col_cod = 2
+                sicro_col_desc = 3
                 for i, val in enumerate(row_lower):
-                    if 'quant' in val: sicro_col_quant = i
-                    elif 'unidade' in val or val == 'un': sicro_col_und = i
-                    elif 'preço unit' in val or 'preco unit' in val: sicro_col_preco = i
+                    if val in ('código', 'codigo'):
+                        sicro_col_cod = i                      # 🔧 CORREÇÃO 1
+                    elif any(k in val for k in ('material', 'mão de obra', 'mao de obra',
+                                                'equipamentos', 'serviços', 'servicos',
+                                                'descrição', 'descricao')):
+                        sicro_col_desc = i                     # 🔧 CORREÇÃO 1
+                    elif 'quant' in val or val == 'consumo':   # 🔧 CORREÇÃO 5
+                        sicro_col_quant = i
+                    elif 'unidade' in val or val == 'un':
+                        sicro_col_und = i
+                    # 🔧 CORREÇÃO 3: ordem de prioridade — 'Custo Unitário' é o preço
+                    # unitário real; 'Custo Horário' é o TOTAL (qtd × unitário) e só
+                    # serve como último recurso
+                    elif 'custo unit' in val or 'preço unit' in val or 'preco unit' in val:
+                        sicro_col_preco = i
                     elif 'custo horário' in val or 'custo horario' in val:
-                        if sicro_col_preco is None: sicro_col_preco = i 
-                
+                        if sicro_col_preco is None:
+                            sicro_col_preco = i
+
                 if 'transporte' in ' '.join(row_lower):
-                    skip_items = True 
+                    skip_items = True   # seção H = transporte, não auditável
                 continue
-                
-            # 5. Cabeçalhos Padrão (SINAPI, SEINFRA, Bases Próprias)
+
+            # 4. Cabeçalhos padrão (SINAPI, SEINFRA, bases próprias)
             if 'código' in row_lower or 'codigo' in row_lower:
                 is_sicro_section = False
                 skip_items = False
                 for i, val in enumerate(row_lower):
-                    if val in ['código', 'codigo']: col_cod = i
-                    elif any(d in val for d in ['descrição', 'descricao']): col_desc = i
-                    elif any(u in val for u in ['und', 'unidade', 'unid']): col_und = i
-                    elif any(q in val for q in ['quant', 'qtd']): col_quant = i
-                    elif any(p in val for p in ['valor unit', 'preço unit', 'preco unit']): col_preco = i
+                    if val in ('código', 'codigo'): col_cod = i
+                    elif any(d in val for d in ('descrição', 'descricao')): col_desc = i
+                    elif any(u in val for u in ('und', 'unidade', 'unid')): col_und = i
+                    elif any(q in val for q in ('quant', 'qtd')): col_quant = i
+                    elif any(p in val for p in ('valor unit', 'preço unit', 'preco unit')): col_preco = i
                 continue
 
-            # 3. Novo Bloco Principal (1.1, 2.1, etc.) - MOVIDO PARA DEPOIS DO CABEÇALHO
+            # 5. Novo bloco principal (2.22, 2.23, ...)
             if re.match(r'^\d+\.\d+$', col0):
                 cod_pai_atual = None
                 is_sicro_section = False
                 in_orse_detail = False
                 skip_items = False
                 continue
-                
-            # 6. Itens e Composições
-            if col0 in ['insumo', 'composição auxiliar', 'composicao auxiliar', 'item', 'composição', 'composicao']:
-                if in_orse_detail or skip_items: continue
-                if col_cod < len(row_list):
-                    cod_item = row_list[col_cod].upper()
-                    if cod_item.lower() in ['código', 'codigo', '', 'nan']: continue
-                    
-                    desc_item = row_list[col_desc] if col_desc is not None and col_desc < len(row_list) else ""
-                    
-                    # Se não tem pai definido e é composição, vira o Pai
-                    if cod_pai_atual is None and col0 in ['composição', 'composicao']:
-                        cod_pai_atual = cod_item
-                        desc_pai_atual = desc_item
-                        continue
-                    else:
-                        # É um Filho
-                        if cod_pai_atual is None: continue # Órfão, ignora
-                        
-                        if is_sicro_section:
-                            qtd_idx = sicro_col_quant if sicro_col_quant is not None else 4
-                            und_idx = sicro_col_und
-                            preco_idx = sicro_col_preco
-                            
-                            qtd_valor = parse_number(row_list[qtd_idx]) if qtd_idx < len(row_list) else 0.0
-                            
-                            if und_idx is not None and und_idx < len(row_list) and row_list[und_idx] != '*':
-                                und_item = row_list[und_idx].upper()
-                            else:
-                                und_item = 'H' # Default para Mão de Obra SICRO3/IOPES
-                                
-                            if preco_idx is not None and preco_idx < len(row_list) and row_list[preco_idx] != '*':
-                                preco_valor = parse_number(row_list[preco_idx])
-                            else:
-                                # Fallback Definitivo: Procura de trás pra frente o Custo Total (último) e Preço Unitário (penúltimo)
-                                preco_valor = 0.0
-                                last_num_idx = -1
-                                for i in range(len(row_list) - 1, qtd_idx, -1):
-                                    val = row_list[i]
-                                    if val != '*' and val != '':
-                                        parsed = parse_number(val)
-                                        if parsed > 0:
-                                            last_num_idx = i
-                                            break
-                                
-                                if last_num_idx != -1:
-                                    # Tenta pegar o número imediatamente antes do Total (Preço Unitário)
-                                    if last_num_idx - 1 >= 0:
-                                        val_preco = row_list[last_num_idx - 1]
-                                        if val_preco != '*' and val_preco != '':
-                                            parsed_preco = parse_number(val_preco)
-                                            if parsed_preco > 0:
-                                                preco_valor = parsed_preco
-                                    
-                                    # Se não achou preço unitário separado, usa o próprio Total
-                                    if preco_valor == 0.0:
-                                        preco_valor = parse_number(row_list[last_num_idx])
-                        else:
-                            # Padrão SINAPI
-                            und_item = row_list[col_und].upper() if col_und < len(row_list) else ""
-                            qtd_valor = parse_number(row_list[col_quant]) if col_quant < len(row_list) else 0.0
-                            preco_valor = parse_number(row_list[col_preco]) if col_preco < len(row_list) else 0.0
 
-                        ordem_sequencial += 1
-                        dados.append({
-                            'Ordem': ordem_sequencial, 'Servico_Pai': cod_pai_atual, 'Descricao_Pai': desc_pai_atual,
-                            'Insumo_Filho': cod_item, 'Descricao_Filho': desc_item, 'Und': und_item,
-                            'Qtd': qtd_valor, 'Preco_Unitario': preco_valor, 'Status_Parsing': 'OK'
-                        })
-                    
+            # 6. Itens e Composições
+            if col0 in tipos_validos:
+                if in_orse_detail or skip_items:
+                    continue
+
+                # 🔧 CORREÇÃO 1: na seção SICRO/SETOP usa colunas mapeadas dinamicamente
+                cod_idx = sicro_col_cod if is_sicro_section else col_cod
+                desc_idx = sicro_col_desc if is_sicro_section else col_desc
+                if cod_idx is None: cod_idx = col_cod
+                if desc_idx is None: desc_idx = col_desc
+
+                cod_item = row_list[cod_idx].upper() if cod_idx < len(row_list) else ''
+                if cod_item.lower() in ('código', 'codigo', '', 'nan'):
+                    continue
+
+                # 🔧 CORREÇÃO 6: se o "código" for só letras (parece nome de banco:
+                # SETOP, SINAPI, ORSE...), o mapeamento falhou — loga e descarta
+                if re.fullmatch(r'[A-Z]+', cod_item) and len(cod_item) >= 3:
+                    log_erros_parse.append({
+                        'Origem': nome_arquivo, 'Código': cod_item,
+                        'Descrição': row_list[desc_idx] if desc_idx < len(row_list) else '',
+                        'Erro': f"Linha {idx+1}: código suspeito (possível coluna de Banco lida como Código)"
+                    })
+                    continue
+
+                desc_item = row_list[desc_idx] if desc_idx < len(row_list) else ""
+
+                if cod_pai_atual is None and col0 in ('composição', 'composicao'):
+                    cod_pai_atual = cod_item
+                    desc_pai_atual = desc_item
+                    continue
+                else:
+                    if cod_pai_atual is None:
+                        continue  # órfão
+
+                    if is_sicro_section:
+                        qtd_idx = sicro_col_quant
+                        und_idx = sicro_col_und
+                        preco_idx = sicro_col_preco
+
+                        qtd_valor = parse_number(row_list[qtd_idx]) if qtd_idx < len(row_list) else 0.0
+
+                        if und_idx is not None and und_idx < len(row_list) and row_list[und_idx] != '*':
+                            und_item = row_list[und_idx].upper()
+                        else:
+                            und_item = 'H'  # default mão de obra SICRO/SETOP
+
+                        if preco_idx is not None and preco_idx < len(row_list) and row_list[preco_idx] != '*':
+                            preco_valor = parse_number(row_list[preco_idx])
+                        else:
+                            # Fallback: varre de trás pra frente (Total → Unitário)
+                            preco_valor = 0.0
+                            last_num_idx = -1
+                            for i in range(len(row_list) - 1, qtd_idx, -1):
+                                val = row_list[i]
+                                if val not in ('*', ''):
+                                    parsed = parse_number(val)
+                                    if parsed > 0:
+                                        last_num_idx = i
+                                        break
+                            if last_num_idx != -1:
+                                if last_num_idx - 1 >= 0:
+                                    val_preco = row_list[last_num_idx - 1]
+                                    if val_preco not in ('*', ''):
+                                        preco_valor = parse_number(val_preco)
+                                if preco_valor == 0.0:
+                                    preco_valor = parse_number(row_list[last_num_idx])
+                    else:
+                        # Padrão SINAPI (inalterado)
+                        und_item = row_list[col_und].upper() if col_und < len(row_list) else ""
+                        qtd_valor = parse_number(row_list[col_quant]) if col_quant < len(row_list) else 0.0
+                        preco_valor = parse_number(row_list[col_preco]) if col_preco < len(row_list) else 0.0
+
+                    ordem_sequencial += 1
+                    dados.append({
+                        'Ordem': ordem_sequencial, 'Servico_Pai': cod_pai_atual,
+                        'Descricao_Pai': desc_pai_atual, 'Insumo_Filho': cod_item,
+                        'Descricao_Filho': desc_item, 'Und': und_item,
+                        'Qtd': qtd_valor, 'Preco_Unitario': preco_valor,
+                        'Status_Parsing': 'OK'
+                    })
+
         df_final = pd.DataFrame(dados)
-        if df_final.empty: return None, f"Planilha {nome_arquivo}: Nenhum dado válido extraído.", None
-        
+        if df_final.empty:
+            return None, f"Planilha {nome_arquivo}: Nenhum dado válido extraído.", None
+
         checksum = hashlib.md5(df_final.to_string().encode()).hexdigest()
         log_msg = f"⚠️ {len(log_erros_parse)} linhas com erro de parsing" if log_erros_parse else ""
         return df_final, log_msg, (checksum, len(df_final))
