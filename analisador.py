@@ -732,36 +732,20 @@ if arquivo_base and arquivo_proposta:
         
         if df_base_raw is not None and df_prop_raw is not None:
             
-            df_base = df_base_raw.copy()
-            df_prop = df_prop_raw.copy()
-            
-            # --- CORREÇÃO DO PRODUTO CARTESIANO (JOIN EXPLOSION) ---
-            df_base['match_id'] = df_base.groupby(['Servico_Pai', 'Insumo_Filho', 'Descricao_Filho']).cumcount()
-            df_prop['match_id'] = df_prop.groupby(['Servico_Pai', 'Insumo_Filho', 'Descricao_Filho']).cumcount()
-            
-            chaves_index = ['Servico_Pai', 'Insumo_Filho', 'Descricao_Filho', 'match_id']
-            
-            df_base.set_index(chaves_index, inplace=True)
-            df_prop.set_index(chaves_index, inplace=True)
+            df_base = df_base_raw.copy().set_index(['Servico_Pai', 'Insumo_Filho'])
+            df_prop = df_prop_raw.copy().set_index(['Servico_Pai', 'Insumo_Filho'])
             
             df_auditoria = df_base.join(df_prop[['Und', 'Qtd', 'Preco_Unitario']], how='inner', rsuffix='_Prop')
             
-            # Itens adicionais na proposta, não encontrados na base
+            # Proposta -> Base (Itens adicionais na proposta, não encontrados na base)
             indices_nao_encontrados_base = set(df_prop.index) - set(df_base.index)
-            if indices_nao_encontrados_base:
-                df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(chaves_index).index.isin(indices_nao_encontrados_base)].reset_index(drop=True).drop(columns=['match_id'], errors='ignore')
-            else:
-                df_nao_encontrados_base = pd.DataFrame()
+            df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_base)].reset_index(drop=True) if indices_nao_encontrados_base else pd.DataFrame()
             
-            # Itens omitidos na proposta, presentes apenas na base
+            # Base -> Proposta (Itens omitidos na proposta, presentes apenas na base)
             indices_nao_encontrados_prop = set(df_base.index) - set(df_prop.index)
-            if indices_nao_encontrados_prop:
-                df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(chaves_index).index.isin(indices_nao_encontrados_prop)].reset_index(drop=True).drop(columns=['match_id'], errors='ignore')
-            else:
-                df_nao_encontrados_prop = pd.DataFrame()
+            df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_prop)].reset_index(drop=True) if indices_nao_encontrados_prop else pd.DataFrame()
             
             df_auditoria.rename(columns={'Und': 'Und_Base', 'Qtd': 'Qtd_Base', 'Preco_Unitario': 'Preco_Base', 'Und_Prop': 'Und_Prop', 'Qtd_Prop': 'Qtd_Prop', 'Preco_Unitario_Prop': 'Preco_Prop'}, inplace=True)
-            
             df_auditoria['Total_Base'] = df_auditoria['Qtd_Base'] * df_auditoria['Preco_Base']
             df_auditoria['Total_Prop'] = df_auditoria['Qtd_Prop'] * df_auditoria['Preco_Prop']
             df_auditoria['Delta_Qtd'] = df_auditoria['Qtd_Prop'] - df_auditoria['Qtd_Base']
@@ -770,8 +754,8 @@ if arquivo_base and arquivo_proposta:
             df_auditoria['Var_Preco_%'] = np.where(df_auditoria['Preco_Base'] > 0, (df_auditoria['Preco_Prop'] / df_auditoria['Preco_Base']) - 1, 0)
             df_auditoria['Var_Total_%'] = np.where(df_auditoria['Total_Base'] > 0, (df_auditoria['Total_Prop'] / df_auditoria['Total_Base']) - 1, 0)
             
-            df_completo = df_auditoria.reset_index().drop(columns=['match_id'], errors='ignore')
-            
+            df_completo = df_auditoria.reset_index()
+
             # Limpeza de valores nulos para evitar erros nos filtros do dashboard
             df_completo['Delta_Total'] = df_completo['Delta_Total'].fillna(0)
             df_completo['Delta_Preco'] = df_completo['Delta_Preco'].fillna(0)
@@ -917,52 +901,35 @@ if arquivo_base and arquivo_proposta:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True, key='dl_kpi')
             
             with tab2:
-               with tab2:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_matriz')
-                
-                import streamlit.components.v1 as components
-                
-                try:
-                    # Tentativa padrão: exibir com o Streamlit
-                    st.dataframe(styler_ui_completo, height=600, use_container_width=True)
-                except Exception as e:
-                    # Se falhar, contorna o bug do Python 3.14 renderizando como HTML
-                    st.warning("A renderização nativa falhou. Tentando método alternativo...")
-                    
-                    with st.expander("Ver detalhes do erro técnico"):
-                        st.code(f"{type(e).__name__}:\n{e}", language="python")
-                    
-                    try:
-                        components.html(styler_ui_completo.to_html(), height=650, scrolling=True)
-                    except Exception as inner_e:
-                        st.error("O objeto Styler está corrompido.")
-                        st.code(f"ERRO REAL:\n{type(inner_e).__name__}:\n{inner_e}", language="python")
-                        st.dataframe(styler_ui_completo.data, height=400, use_container_width=True)
-                        
-            with tab3:
+              import streamlit.components.v1 as components
+
+try:
+    # Tentativa padrão: exibir com o Streamlit
+    st.dataframe(styler_ui_completo, height=600, use_container_width=True)
+
+except Exception as e:
+    # Se falhar, contorna o bug do Python 3.14 renderizando como HTML
+    st.warning("A renderização nativa falhou. Tentando método alternativo...")
+    
+    with st.expander("Ver detalhes do erro técnico"):
+        st.code(f"{type(e).__name__}:\n{e}", language="python")
+    
+    try:
+        components.html(styler_ui_completo.to_html(), height=650, scrolling=True)
+    except Exception as inner_e:
+        st.error("O objeto Styler está corrompido.")
+        st.code(f"ERRO REAL:\n{type(inner_e).__name__}:\n{inner_e}", language="python")
+        st.dataframe(styler_ui_completo.data, height=400, use_container_width=True)
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_erro')
-                if styler_ui_erros is not None: 
-                    st.dataframe(styler_ui_erros, height=500, use_container_width=True)
-                else: 
-                    st.success("✅ Tudo em conformidade!")
-                    
+                if styler_ui_erros is not None: st.dataframe(styler_ui_erros, height=500, use_container_width=True)
+                else: st.success("✅ Tudo em conformidade!")
             with tab4:
-                if styler_ui_ne_base is not None: 
-                    st.dataframe(styler_ui_ne_base, height=500, use_container_width=True)
-                else: 
-                    st.success("✅ Alinhamento Completo! Todos os insumos da proposta existem na base.")
-                    
+                if styler_ui_ne_base is not None: st.dataframe(styler_ui_ne_base, height=500, use_container_width=True)
+                else: st.success("✅ Alinhamento Completo! Todos os insumos da proposta existem na base.")
             with tab5:
-                if styler_ui_ne_prop is not None: 
-                    st.dataframe(styler_ui_ne_prop, height=500, use_container_width=True)
-                else: 
-                    st.success("✅ Alinhamento Completo! A proposta contempla 100% dos itens presentes na base de referência.")
-                    
-            with tab6: 
-                st.success("✅ Zero erros estruturais identificados.")
-                
-            with tab7: 
-                st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
-                
-            with tab8: 
-                st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
+                if styler_ui_ne_prop is not None: st.dataframe(styler_ui_ne_prop, height=500, use_container_width=True)
+                else: st.success("✅ Alinhamento Completo! A proposta contempla 100% dos itens presentes na base de referência.")
+            with tab6: st.success("✅ Zero erros estruturais identificados.")
+            with tab7: st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
+            with tab8: st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
