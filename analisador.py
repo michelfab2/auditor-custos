@@ -902,25 +902,23 @@ if arquivo_base and arquivo_proposta:
             
             with tab2:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_matriz')
-              import streamlit.components.v1 as components
+                import streamlit.components.v1 as components
+                try:
+                    # Tentativa padrão: exibir com o Streamlit
+                    st.dataframe(styler_ui_completo, height=600, use_container_width=True)
+                except Exception as e:
+                    # Se falhar, contorna o bug do Python 3.14 renderizando como HTML
+                    st.warning("A renderização nativa falhou. Tentando método alternativo...")
+                    with st.expander("Ver detalhes do erro técnico"):
+                        st.code(f"{type(e).__name__}:\n{e}", language="python")
+                    try:
+                        components.html(styler_ui_completo.to_html(), height=650, scrolling=True)
+                    except Exception as inner_e:
+                        st.error("O objeto Styler está corrompido.")
+                        st.code(f"ERRO REAL:\n{type(inner_e).__name__}:\n{inner_e}", language="python")
+                        st.dataframe(styler_ui_completo.data, height=400, use_container_width=True)
 
-try:
-    # Tentativa padrão: exibir com o Streamlit
-    st.dataframe(styler_ui_completo, height=600, use_container_width=True)
-
-except Exception as e:
-    # Se falhar, contorna o bug do Python 3.14 renderizando como HTML
-    st.warning("A renderização nativa falhou. Tentando método alternativo...")
-    
-    with st.expander("Ver detalhes do erro técnico"):
-        st.code(f"{type(e).__name__}:\n{e}", language="python")
-    
-    try:
-        components.html(styler_ui_completo.to_html(), height=650, scrolling=True)
-    except Exception as inner_e:
-        st.error("O objeto Styler está corrompido.")
-        st.code(f"ERRO REAL:\n{type(inner_e).__name__}:\n{inner_e}", language="python")
-        st.dataframe(styler_ui_completo.data, height=400, use_container_width=True)
+            with tab3:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_erro')
                 if styler_ui_erros is not None: st.dataframe(styler_ui_erros, height=500, use_container_width=True)
                 else: st.success("✅ Tudo em conformidade!")
