@@ -901,35 +901,52 @@ if arquivo_base and arquivo_proposta:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True, key='dl_kpi')
             
             with tab2:
+               with tab2:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_matriz')
-              import streamlit.components.v1 as components
-
-try:
-    # Tentativa padrão: exibir com o Streamlit
-    st.dataframe(styler_ui_completo, height=600, use_container_width=True)
-
-except Exception as e:
-    # Se falhar, contorna o bug do Python 3.14 renderizando como HTML
-    st.warning("A renderização nativa falhou. Tentando método alternativo...")
-    
-    with st.expander("Ver detalhes do erro técnico"):
-        st.code(f"{type(e).__name__}:\n{e}", language="python")
-    
-    try:
-        components.html(styler_ui_completo.to_html(), height=650, scrolling=True)
-    except Exception as inner_e:
-        st.error("O objeto Styler está corrompido.")
-        st.code(f"ERRO REAL:\n{type(inner_e).__name__}:\n{inner_e}", language="python")
-        st.dataframe(styler_ui_completo.data, height=400, use_container_width=True)
+                
+                import streamlit.components.v1 as components
+                
+                try:
+                    # Tentativa padrão: exibir com o Streamlit
+                    st.dataframe(styler_ui_completo, height=600, use_container_width=True)
+                except Exception as e:
+                    # Se falhar, contorna o bug do Python 3.14 renderizando como HTML
+                    st.warning("A renderização nativa falhou. Tentando método alternativo...")
+                    
+                    with st.expander("Ver detalhes do erro técnico"):
+                        st.code(f"{type(e).__name__}:\n{e}", language="python")
+                    
+                    try:
+                        components.html(styler_ui_completo.to_html(), height=650, scrolling=True)
+                    except Exception as inner_e:
+                        st.error("O objeto Styler está corrompido.")
+                        st.code(f"ERRO REAL:\n{type(inner_e).__name__}:\n{inner_e}", language="python")
+                        st.dataframe(styler_ui_completo.data, height=400, use_container_width=True)
+                        
+            with tab3:
                 st.download_button("📥 Baixar Laudo de Auditoria Unificado (.XLSX)", data=excel_bytes, file_name='Laudo_Auditoria_PRO_Consolidado.xlsx', use_container_width=True, key='dl_erro')
-                if styler_ui_erros is not None: st.dataframe(styler_ui_erros, height=500, use_container_width=True)
-                else: st.success("✅ Tudo em conformidade!")
+                if styler_ui_erros is not None: 
+                    st.dataframe(styler_ui_erros, height=500, use_container_width=True)
+                else: 
+                    st.success("✅ Tudo em conformidade!")
+                    
             with tab4:
-                if styler_ui_ne_base is not None: st.dataframe(styler_ui_ne_base, height=500, use_container_width=True)
-                else: st.success("✅ Alinhamento Completo! Todos os insumos da proposta existem na base.")
+                if styler_ui_ne_base is not None: 
+                    st.dataframe(styler_ui_ne_base, height=500, use_container_width=True)
+                else: 
+                    st.success("✅ Alinhamento Completo! Todos os insumos da proposta existem na base.")
+                    
             with tab5:
-                if styler_ui_ne_prop is not None: st.dataframe(styler_ui_ne_prop, height=500, use_container_width=True)
-                else: st.success("✅ Alinhamento Completo! A proposta contempla 100% dos itens presentes na base de referência.")
-            with tab6: st.success("✅ Zero erros estruturais identificados.")
-            with tab7: st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
-            with tab8: st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
+                if styler_ui_ne_prop is not None: 
+                    st.dataframe(styler_ui_ne_prop, height=500, use_container_width=True)
+                else: 
+                    st.success("✅ Alinhamento Completo! A proposta contempla 100% dos itens presentes na base de referência.")
+                    
+            with tab6: 
+                st.success("✅ Zero erros estruturais identificados.")
+                
+            with tab7: 
+                st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
+                
+            with tab8: 
+                st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
