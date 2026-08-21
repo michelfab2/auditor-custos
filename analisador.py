@@ -7,6 +7,11 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import hashlib
 
+st.set_page_config(page_title="Auditoria PRO", layout="wide", page_icon="🛡️")
+
+MAX_FILE_SIZE_MB = 50
+CACHE_TTL = 3600
+
 # ==========================================
 # 0. CONFIGURAÇÕES E CACHE
 # ==========================================
