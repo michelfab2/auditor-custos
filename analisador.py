@@ -593,18 +593,42 @@ if arquivo_base and arquivo_proposta:
         df_base_raw, msg_base, check_base = carregar_orcafascio(arquivo_base.getvalue(), "Base")
         df_prop_raw, msg_prop, check_prop = carregar_orcafascio(arquivo_proposta.getvalue(), "Proposta")
         
-        if df_base_raw is not None and df_prop_raw is not None:
+              if df_base_raw is not None and df_prop_raw is not None:
             
-            df_base = df_base_raw.copy().set_index(['Servico_Pai', 'Insumo_Filho'])
-            df_prop = df_prop_raw.copy().set_index(['Servico_Pai', 'Insumo_Filho'])
+            # 1. AGRUPAMENTO PARA EVITAR PRODUTO CARTESIANO
+            # Isso consolida itens duplicados dentro da mesma composição, somando as quantidades.
+            df_base = df_base_raw.groupby(['Servico_Pai', 'Insumo_Filho']).agg({
+                'Qtd': 'sum',
+                'Preco_Unitario': 'mean',
+                'Und': 'first',
+                'Descricao_Pai': 'first',
+                'Descricao_Filho': 'first',
+                'Ordem': 'min',
+                'Status_Parsing': 'first'
+            }).reset_index()
+            
+            df_prop = df_prop_raw.groupby(['Servico_Pai', 'Insumo_Filho']).agg({
+                'Qtd': 'sum',
+                'Preco_Unitario': 'mean',
+                'Und': 'first',
+                'Descricao_Pai': 'first',
+                'Descricao_Filho': 'first',
+                'Ordem': 'min',
+                'Status_Parsing': 'first'
+            }).reset_index()
+            
+            # 2. INDEXAÇÃO E JOIN
+            df_base = df_base.set_index(['Servico_Pai', 'Insumo_Filho'])
+            df_prop = df_prop.set_index(['Servico_Pai', 'Insumo_Filho'])
             
             df_auditoria = df_base.join(df_prop[['Und', 'Qtd', 'Preco_Unitario']], how='inner', rsuffix='_Prop')
             
+            # 3. ITENS NÃO ENCONTRADOS (Usando dados já agrupados para não duplicar)
             indices_nao_encontrados_base = set(df_prop.index) - set(df_base.index)
-            df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_base)].reset_index(drop=True) if indices_nao_encontrados_base else pd.DataFrame()
+            df_nao_encontrados_base = df_prop[df_prop.index.isin(indices_nao_encontrados_base)].reset_index(drop=True) if indices_nao_encontrados_base else pd.DataFrame()
             
             indices_nao_encontrados_prop = set(df_base.index) - set(df_prop.index)
-            df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_prop)].reset_index(drop=True) if indices_nao_encontrados_prop else pd.DataFrame()
+            df_nao_encontrados_prop = df_base[df_base.index.isin(indices_nao_encontrados_prop)].reset_index(drop=True) if indices_nao_encontrados_prop else pd.DataFrame()
             
             df_auditoria.rename(columns={'Und': 'Und_Base', 'Qtd': 'Qtd_Base', 'Preco_Unitario': 'Preco_Base', 'Und_Prop': 'Und_Prop', 'Qtd_Prop': 'Qtd_Prop', 'Preco_Unitario_Prop': 'Preco_Prop'}, inplace=True)
             df_auditoria['Total_Base'] = df_auditoria['Qtd_Base'] * df_auditoria['Preco_Base']
@@ -617,6 +641,7 @@ if arquivo_base and arquivo_proposta:
             
             df_completo = df_auditoria.reset_index()
 
+            # Limpeza de valores nulos
             df_completo['Delta_Total'] = df_completo['Delta_Total'].fillna(0)
             df_completo['Delta_Preco'] = df_completo['Delta_Preco'].fillna(0)
             df_completo['Delta_Qtd'] = df_completo['Delta_Qtd'].fillna(0)
@@ -625,6 +650,7 @@ if arquivo_base and arquivo_proposta:
             df_completo['Und_Base'] = df_completo['Und_Base'].fillna('').astype(str)
             df_completo['Und_Prop'] = df_completo['Und_Prop'].fillna('').astype(str)
             
+            # Filtros
             sobrepreco_filter = (df_completo['Delta_Preco'] > 0) | (df_completo['Delta_Total'] > 0) | (df_completo['Var_Preco_%'] > 0) | (df_completo['Var_Total_%'] > 0)
             inexequivel_filter = (df_completo['Var_Preco_%'] < st.session_state.limiar_desconto) | (df_completo['Var_Total_%'] < st.session_state.limiar_desconto)
             qtd_filter = df_completo['Delta_Qtd'] != 0
@@ -635,11 +661,12 @@ if arquivo_base and arquivo_proposta:
             df_visual_completo = transformar_hierarquico(df_completo)
             df_visual_erros = transformar_hierarquico(irregularidades) if not irregularidades.empty else pd.DataFrame()
             
+            # Passando os DataFrames agrupados para as abas de "Não Encontrados" e "DB"
             df_visual_ne_base = transformar_hierarquico_raw(df_nao_encontrados_base)
             df_visual_ne_prop = transformar_hierarquico_raw(df_nao_encontrados_prop)
             
-            df_visual_db_base = transformar_hierarquico_raw(df_base_raw)
-            df_visual_db_prop = transformar_hierarquico_raw(df_prop_raw)
+            df_visual_db_base = transformar_hierarquico_raw(df_base.reset_index())
+            df_visual_db_prop = transformar_hierarquico_raw(df_prop.reset_index())
             
             total_insumos, total_irregularidades = len(df_completo), len(irregularidades)
             total_base, total_proposta = float(df_completo['Total_Base'].sum()), float(df_completo['Total_Prop'].sum())
