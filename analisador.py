@@ -46,31 +46,31 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
         # Mapeamento padrão (SINAPI)
         col_cod, col_desc, col_und, col_quant, col_preco = 1, 3, 6, 7, 8
         
-        def parse_number(val):
-    if val is None or val == '' or val == '*':
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip()
-    if s == '':
-        return 0.0
-    # Remove espaços, R$, %
-    s = re.sub(r'[R$\s%]', '', s)
-    if ',' in s and '.' in s:
-        # Detecta qual é o decimal pelo ÚLTIMO separador
-        if s.rfind(',') < s.rfind('.'):
-            # Padrão BR: vírgula = milhar, ponto = decimal
-            s = s.replace(',', '')
-        else:
-            # Padrão EU: ponto = milhar, vírgula = decimal
-            s = s.replace('.', '').replace(',', '.')
-    elif ',' in s:
-        # Só vírgula → assume decimal (padrão BR/EU)
-        s = s.replace(',', '.')
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
+          def parse_number(val):
+            if val is None or val == '' or val == '*':
+                return 0.0
+            if isinstance(val, (int, float)):
+                return float(val)
+            s = str(val).strip()
+            if s == '':
+                return 0.0
+            # Remove espaços, R$, %
+            s = re.sub(r'[R$\s%]', '', s)
+            if ',' in s and '.' in s:
+                # Detecta qual é o decimal pelo ÚLTIMO separador
+                if s.rfind(',') < s.rfind('.'):
+                    # Padrão BR: vírgula = milhar, ponto = decimal
+                    s = s.replace(',', '')
+                else:
+                    # Padrão EU: ponto = milhar, vírgula = decimal
+                    s = s.replace('.', '').replace(',', '.')
+            elif ',' in s:
+                # Só vírgula → assume decimal (padrão BR/EU)
+                s = s.replace(',', '.')
+            try:
+                return float(s)
+            except ValueError:
+                return 0.0
 
         for idx, row in df_raw.iterrows():
             row_list = [str(x).strip() if pd.notna(x) else '' for x in row]
