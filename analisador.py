@@ -77,7 +77,7 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
             row_lower = [x.lower() for x in row_list]
             col0 = row_list[0].lower() if len(row_list) > 0 else ''
             
-            # 1. Ignorar Detalhamento ORSE
+                       # 1. Ignorar Detalhamento ORSE
             if 'detalhamento de cálculo orse' in col0 or 'detalhamento de calculo orse' in col0:
                 in_orse_detail = True
                 continue
@@ -89,11 +89,9 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                 in_orse_detail = False
                 skip_items = False
                 continue
-                
-            
-                
-            # 4. Sub-cabeçalhos SICRO3/SETOP/IOPES (Iniciam com B, C, D, E, F, G)
-        if len(col0) == 1 and col0.upper() in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
+
+            # 4. Sub-cabeçalhos SICRO3/SETOP/IOPES (Iniciam com A, B, C, D, E, F, G)
+            if len(col0) == 1 and col0.upper() in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
                 is_sicro_section = True
                 skip_items = False
                 sicro_col_quant = 4
@@ -104,10 +102,10 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                     elif 'unidade' in val or val == 'un': sicro_col_und = i
                     elif 'preço unit' in val or 'preco unit' in val: sicro_col_preco = i
                     elif 'custo horário' in val or 'custo horario' in val:
-                        if sicro_col_preco is None: sicro_col_preco = i # Em Mão de Obra, Custo Horário é o Preço
+                        if sicro_col_preco is None: sicro_col_preco = i 
                 
                 if 'transporte' in ' '.join(row_lower):
-                    skip_items = True # Ignora itens de transporte (bloco F do SICRO3)
+                    skip_items = True 
                 continue
                 
             # 5. Cabeçalhos Padrão (SINAPI, SEINFRA, Bases Próprias)
@@ -122,7 +120,7 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                     elif any(p in val for p in ['valor unit', 'preço unit', 'preco unit']): col_preco = i
                 continue
 
-        # 3. Novo Bloco Principal (1.1, 2.1, etc.)
+            # 3. Novo Bloco Principal (1.1, 2.1, etc.) - MOVIDO PARA DEPOIS DO CABEÇALHO
             if re.match(r'^\d+\.\d+$', col0):
                 cod_pai_atual = None
                 is_sicro_section = False
