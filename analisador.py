@@ -90,16 +90,10 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                 skip_items = False
                 continue
                 
-            # 3. Novo Bloco Principal (1.1, 2.1, etc.)
-            if re.match(r'^\d+\.\d+$', col0):
-                cod_pai_atual = None
-                is_sicro_section = False
-                in_orse_detail = False
-                skip_items = False
-                continue
+            
                 
             # 4. Sub-cabeçalhos SICRO3/SETOP/IOPES (Iniciam com B, C, D, E, F, G)
-            if len(col0) == 1 and col0.upper() in ['B', 'C', 'D', 'E', 'F', 'G']:
+        if len(col0) == 1 and col0.upper() in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
                 is_sicro_section = True
                 skip_items = False
                 sicro_col_quant = 4
@@ -126,6 +120,14 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
                     elif any(u in val for u in ['und', 'unidade', 'unid']): col_und = i
                     elif any(q in val for q in ['quant', 'qtd']): col_quant = i
                     elif any(p in val for p in ['valor unit', 'preço unit', 'preco unit']): col_preco = i
+                continue
+
+        # 3. Novo Bloco Principal (1.1, 2.1, etc.)
+            if re.match(r'^\d+\.\d+$', col0):
+                cod_pai_atual = None
+                is_sicro_section = False
+                in_orse_detail = False
+                skip_items = False
                 continue
                 
             # 6. Itens e Composições
