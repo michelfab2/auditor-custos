@@ -718,9 +718,31 @@ if arquivo_base and arquivo_proposta:
         
         if df_base_raw is not None and df_prop_raw is not None:
             
-            df_base = df_base_raw.copy().set_index(['Servico_Pai', 'Insumo_Filho'])
-            df_prop = df_prop_raw.copy().set_index(['Servico_Pai', 'Insumo_Filho'])
+            # AGRUPAMENTO POR INSUMO (Garante o cruzamento independentemente da hierarquia)
+            df_base = df_base_raw.groupby('Insumo_Filho').agg({
+                'Qtd': 'sum',
+                'Preco_Unitario': 'mean',
+                'Und': 'first',
+                'Descricao_Pai': 'first',
+                'Descricao_Filho': 'first',
+                'Ordem': 'min',
+                'Status_Parsing': 'first'
+            }).reset_index()
             
+            df_prop = df_prop_raw.groupby('Insumo_Filho').agg({
+                'Qtd': 'sum',
+                'Preco_Unitario': 'mean',
+                'Und': 'first',
+                'Descricao_Pai': 'first',
+                'Descricao_Filho': 'first',
+                'Ordem': 'min',
+                'Status_Parsing': 'first'
+            }).reset_index()
+            
+            df_base = df_base.set_index('Insumo_Filho')
+            df_prop = df_prop.set_index('Insumo_Filho')
+            
+            # Cruza apenas pelo código do insumo (index)
             df_auditoria = df_base.join(df_prop[['Und', 'Qtd', 'Preco_Unitario']], how='inner', rsuffix='_Prop')
             
             # Proposta -> Base (Itens adicionais na proposta, não encontrados na base)
