@@ -177,13 +177,22 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo):
 
                 desc_item = row_list[desc_idx] if desc_idx < len(row_list) else ""
 
-                if cod_pai_atual is None and col0 in ('composição', 'composicao'):
-                    cod_pai_atual = cod_item
-                    desc_pai_atual = desc_item
-                    continue
-                else:
-                    if cod_pai_atual is None:
-                        continue  # órfão
+                                  # Se não tem pai definido e é composição, vira o Pai
+                    if cod_pai_atual is None and col0 in ['composição', 'composicao']:
+                        cod_pai_atual = cod_item
+                        desc_pai_atual = desc_item
+                        
+                        # ADICIONA A COMPOSIÇÃO COMO FILHA DELA MESMA PARA AUDITORIA
+                        ordem_sequencial += 1
+                        dados.append({
+                            'Ordem': ordem_sequencial, 'Servico_Pai': cod_pai_atual, 'Descricao_Pai': desc_pai_atual,
+                            'Insumo_Filho': cod_item, 'Descricao_Filho': desc_item, 'Und': und_item,
+                            'Qtd': qtd_valor, 'Preco_Unitario': preco_valor, 'Status_Parsing': 'OK'
+                        })
+                        continue
+                    else:
+                        # É um Filho
+                        if cod_pai_atual is None: continue # Órfão, ignora
 
                     if is_sicro_section:
                         qtd_idx = sicro_col_quant
