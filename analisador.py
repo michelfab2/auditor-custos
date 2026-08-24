@@ -746,12 +746,12 @@ if arquivo_base and arquivo_proposta:
             df_auditoria = df_base.join(df_prop[['Und', 'Qtd', 'Preco_Unitario']], how='inner', rsuffix='_Prop')
             
             # Proposta -> Base (Itens adicionais na proposta, não encontrados na base)
-            indices_nao_encontrados_base = set(df_prop.index) - set(df_base.index)
-            df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_base)].reset_index(drop=True) if indices_nao_encontrados_base else pd.DataFrame()
+             indices_nao_encontrados_base = set(df_prop.index) - set(df_base.index)
+            df_nao_encontrados_base = df_prop_raw[df_prop_raw['Insumo_Filho'].isin(indices_nao_encontrados_base)].drop_duplicates(subset=['Insumo_Filho']).reset_index(drop=True) if indices_nao_encontrados_base else pd.DataFrame()
             
             # Base -> Proposta (Itens omitidos na proposta, presentes apenas na base)
-            indices_nao_encontrados_prop = set(df_base.index) - set(df_prop.index)
-            df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(['Servico_Pai', 'Insumo_Filho']).index.isin(indices_nao_encontrados_prop)].reset_index(drop=True) if indices_nao_encontrados_prop else pd.DataFrame()
+           indices_nao_encontrados_prop = set(df_base.index) - set(df_prop.index)
+            df_nao_encontrados_prop = df_base_raw[df_base_raw['Insumo_Filho'].isin(indices_nao_encontrados_prop)].drop_duplicates(subset=['Insumo_Filho']).reset_index(drop=True) if indices_nao_encontrados_prop else pd.DataFrame()
             
             df_auditoria.rename(columns={'Und': 'Und_Base', 'Qtd': 'Qtd_Base', 'Preco_Unitario': 'Preco_Base', 'Und_Prop': 'Und_Prop', 'Qtd_Prop': 'Qtd_Prop', 'Preco_Unitario_Prop': 'Preco_Prop'}, inplace=True)
             df_auditoria['Total_Base'] = df_auditoria['Qtd_Base'] * df_auditoria['Preco_Base']
