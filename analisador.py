@@ -716,12 +716,13 @@ if arquivo_base and arquivo_proposta:
         df_base_raw, msg_base, check_base = carregar_orcafascio(arquivo_base.getvalue(), "Base")
         df_prop_raw, msg_prop, check_prop = carregar_orcafascio(arquivo_proposta.getvalue(), "Proposta")
         
-        if df_base_raw is not None and df_prop_raw is not None:
-                        # AGRUPAMENTO POR INSUMO (Garante o cruzamento independentemente da hierarquia)
+        if df_base_raw is not None and df_prop_raw is not None:           
+            # AGRUPAMENTO POR INSUMO (Garante o cruzamento independentemente da hierarquia)
             df_base = df_base_raw.groupby('Insumo_Filho').agg({
                 'Qtd': 'sum',
                 'Preco_Unitario': 'mean',
                 'Und': 'first',
+                'Servico_Pai': 'first',
                 'Descricao_Pai': 'first',
                 'Descricao_Filho': 'first',
                 'Ordem': 'min',
@@ -732,6 +733,7 @@ if arquivo_base and arquivo_proposta:
                 'Qtd': 'sum',
                 'Preco_Unitario': 'mean',
                 'Und': 'first',
+                'Servico_Pai': 'first',
                 'Descricao_Pai': 'first',
                 'Descricao_Filho': 'first',
                 'Ordem': 'min',
