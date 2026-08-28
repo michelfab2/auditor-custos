@@ -352,7 +352,7 @@ def main():
         <div style="padding:8px;margin-bottom:5px;border-radius:5px;background:#dbeafe;color:#1e3a8a"><b>🟦 Azul</b><br>Composição principal.</div>
         """, unsafe_allow_html=True)
         st.caption("Itens em outra CPU são realocados, não omitidos.")
-    st.title("🛡️ Auditoria de Orçamentos PRO")
+    st.title("🛡️ Auditoria de Orçamentos")
     st.markdown("Validação paramétrica de CPUs do OrçaFascio.")
     col1, col2 = st.columns(2)
     with col1: arquivo_base = st.file_uploader("1. Base de Referência", type=["xlsx", "xls"])
