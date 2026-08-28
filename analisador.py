@@ -302,7 +302,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
             
         df_nao_encontrados_base.to_excel(writer, index=False, sheet_name='📍 Não Encontrados na Base', startrow=1)
         df_nao_encontrados_prop.to_excel(writer, index=False, sheet_name='📍 Omitidos na Proposta', startrow=1)
-        df_realocados.to_excel(writer, index=False, sheet_name='🔀 Realocados / Estrutura Divergente', startrow=1)
+        df_realocados.to_excel(writer, index=False, sheet_name='🔀 Realocados / Estrutura', startrow=1)
         df_parsing.to_excel(writer, index=False, sheet_name='📝 Log de Erros de Parsing', startrow=1)
         df_db_base.to_excel(writer, index=False, sheet_name='🗄️ DB Base', startrow=1)
         df_db_prop.to_excel(writer, index=False, sheet_name='🗄️ DB Proposta', startrow=1)
@@ -435,7 +435,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
             if name in ['📋 Matriz Completa', '🚨 Inconformidades']:
                 injetar_legenda(ws)
                 linha_cabecalho = 9
-            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🔀 Realocados / Estrutura Divergente', '🗄️ DB Base', '🗄️ DB Proposta', '📝 Log de Erros de Parsing']:
+            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🔀 Realocados / Estrutura', '🗄️ DB Base', '🗄️ DB Proposta', '📝 Log de Erros de Parsing']:
                 linha_cabecalho = 2
             else:
                 linha_cabecalho = 1
@@ -475,7 +475,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                     if v_preco < limiar_desconto and col_var_preco: ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
                     if v_total < limiar_desconto and col_var_total: ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
 
-            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🔀 Realocados / Estrutura Divergente', '🗄️ DB Base', '🗄️ DB Proposta']:
+            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🔀 Realocados / Estrutura', '🗄️ DB Base', '🗄️ DB Proposta']:
                 for r_idx in range(linha_cabecalho + 1, ws.max_row + 1):
                     if 'COMPOSIÇÃO' in safe_str(ws.cell(row=r_idx, column=2).value):
                         for c_idx in range(1, ws.max_column + 1):
