@@ -275,7 +275,6 @@ def formatar_aba(ws, cabecalho):
 def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base, prop, log, limiar, metricas):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         matriz.to_excel(writer, index=False, sheet_name="Matriz Completa", startrow=8)
         erros.to_excel(writer, index=False, sheet_name="Inconformidades", startrow=8)
         hierarquia(omitidos).to_excel(writer, index=False, sheet_name="Omitidos na Proposta", startrow=1)
@@ -298,11 +297,6 @@ def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base
             ("RISCO SOBREPREÇO", metricas["sobrepreco"], "money"),
             ("DESCONTO OCULTO", metricas["inexequivel"], "money"),
             ("MAIOR DESVIO ÚNICO", metricas["maior_desvio"], "money"),
-        metricas = [("ITENS AUDITADOS", len(auditado)), ("OMITIDOS REAIS", len(omitidos)), ("REALOCADOS", len(realocados)), ("LIMIAR DE DESCONTO", limiar)]
-        for indice, (titulo, valor) in enumerate(metricas):
-            coluna, linha = 2 + (indice % 2) * 4, 5 + (indice // 2) * 4
-            painel.merge_cells(start_row=linha, start_column=coluna, end_row=linha, end_column=coluna + 2)
-            painel.merge_cells(start_row=linha + 1, start_column=coluna, end_row=linha + 2, end_column=coluna + 2)
         ]
         for indice, (titulo, valor, formato) in enumerate(cards):
             coluna, linha = 2 + (indice % 3) * 3, 5 + (indice // 3) * 4
@@ -313,8 +307,6 @@ def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base
             painel.cell(linha, coluna).alignment = Alignment(horizontal="center")
             painel.cell(linha + 1, coluna, valor).font = Font(size=15, bold=True)
             painel.cell(linha + 1, coluna).alignment = Alignment(horizontal="center", vertical="center")
-            if indice == 3:
-                painel.cell(linha + 1, coluna).number_format = "0%"
             if formato == "percent": painel.cell(linha + 1, coluna).number_format = "0.0%"
             elif formato == "money": painel.cell(linha + 1, coluna).number_format = '"R$" #,##0.00'
         for letra in "BCDEFGHIJ": painel.column_dimensions[letra].width = 18
@@ -330,7 +322,6 @@ def main():
         st.subheader("⚙️ Parâmetros de Auditoria")
         st.session_state.limiar = st.slider("Limiar de Desconto (Inexequibilidade)", -50, -5, -25, 1) / 100
         higienizar = st.checkbox("🧹 Higienizar dados", value=True)
-        st.info("CPUs são lidas com insumos e composições auxiliares. Itens em outra CPU são realocados, não omitidos.")
         st.success(f"📌 Limiar configurado: {st.session_state.limiar:.0%}")
         st.divider()
         st.subheader("📌 Legenda de Auditoria")
@@ -361,15 +352,11 @@ def main():
     matriz, tabela_erros = hierarquia(auditado, True), hierarquia(inconformidades, True)
     log = pd.concat([log_base, log_prop], ignore_index=True)
     metricas = calcular_metricas(auditado, inconformidades, omitidos, realocados, st.session_state.limiar)
-    excel = gerar_excel(auditado, matriz, tabela_erros, omitidos, adicionados, realocados, base, prop, log, st.session_state.limiar)
     excel = gerar_excel(auditado, matriz, tabela_erros, omitidos, adicionados, realocados, base, prop, log, st.session_state.limiar, metricas)
     formato = {"Qtd_Base": "{:.4f}", "Qtd_Prop": "{:.4f}", "Delta_Qtd": "{:.4f}", "Preco_Base": "R$ {:.2f}", "Preco_Prop": "R$ {:.2f}", "Delta_Preco": "R$ {:.2f}", "Var_Preco_%": "{:.2%}", "Total_Base": "R$ {:.2f}", "Total_Prop": "R$ {:.2f}", "Delta_Total": "R$ {:.2f}", "Var_Total_%": "{:.2%}"}
     tabs = st.tabs(["📊 Dashboard KPI", "📋 Matriz Completa", "🚨 Inconformidades", "📍 Omitidos Reais", "🔀 Realocados", "📍 Adicionados", "📝 Log", "🗄️ DB Base", "🗄️ DB Proposta"])
     with tabs[0]:
         a, b, c = st.columns(3)
-        a.metric("Itens auditados", len(auditado), f"{len(inconformidades)} divergências")
-        b.metric("Omitidos reais", len(omitidos), "código ausente na proposta")
-        c.metric("Realocados", len(realocados), "código em outra CPU")
         a.metric("📌 Volume de Itens Auditados", f"{metricas['total_itens']:,}", f"{len(inconformidades)} desvios sinalizados")
         b.metric("💰 Saldo Global do Orçamento", f"R$ {metricas['total_prop']:,.2f}", f"Variação: {metricas['variacao_geral']:+.2%}", delta_color="inverse")
         c.metric("✅ Índice de Acerto Paramétrico", f"{metricas['conformidade']:.1%}", "Meta aceitável: > 95%")
