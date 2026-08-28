@@ -73,7 +73,9 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
     mapa = {"cod": 1, "desc": 3, "und": 6, "qtd": 7, "preco": 8}
     itens, erros = [], []
     cpu, descricao_cpu, ordem = None, "", 0
-    tipos = {"composicao", "composicaoauxiliar", "insumo", "item"}
+    # >>> ADIÇÃO 1: reconhecer "Atividade Auxiliar" (SETOP) como tipo válido
+    tipos = {"composicao", "composicaoauxiliar", "insumo", "item", "atividadeauxiliar"}
+    # <<< ADIÇÃO 1
 
     for indice, linha in bruto.iterrows():
         valores = [texto(valor) for valor in linha.tolist()]
@@ -87,6 +89,16 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
         if "codigo" in tipo or ("descricao" in tipo and "quant" in "".join(rotulo(v) for v in valores)):
             mapa = localizar_colunas(valores, mapa)
             continue
+        # >>> ADIÇÃO 2: reconhecer cabeçalhos de seção A/B/F/G/H que invertem colunas
+        if len(tipo) == 1 and tipo in "abfgh":
+            mapa = localizar_colunas(valores, mapa)
+            continue
+        # <<< ADIÇÃO 2
+        # >>> ADIÇÃO 3: "Resumo" indica fim da CPU atual (separador de CPUs na Proposta)
+        if tipo == "resumo":
+            cpu, descricao_cpu = None, ""
+            continue
+        # <<< ADIÇÃO 3
         if tipo not in tipos:
             continue
 
@@ -101,15 +113,22 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
             continue
         if tipo == "composicao":
             cpu, descricao_cpu = cod, desc
+        # >>> ADIÇÃO 4: quando não há Composição principal, tratar Insumo/Atividade como CPU autônoma
         if cpu is None:
-            erros.append({"Origem": origem, "Linha": indice + 1, "Tipo": tipo, "Erro": "Subitem sem composição principal"})
-            continue
+            if tipo in {"insumo", "composicaoauxiliar", "item", "atividadeauxiliar"}:
+                cpu, descricao_cpu = cod, desc
+            else:
+                erros.append({"Origem": origem, "Linha": indice + 1, "Tipo": tipo, "Erro": "Subitem sem composição principal"})
+                continue
+        # <<< ADIÇÃO 4
 
         ordem += 1
         itens.append({
             "Ordem": ordem, "CPU": cpu, "Descricao_CPU": descricao_cpu,
             "Codigo": cod, "Descricao": desc,
-            "Tipo": {"composicao": "Composição", "composicaoauxiliar": "Composição auxiliar", "insumo": "Insumo", "item": "Item"}[tipo],
+            "Tipo": {"composicao": "Composição", "composicaoauxiliar": "Composição auxiliar",
+                     "insumo": "Insumo", "item": "Item",
+                     "atividadeauxiliar": "Composição auxiliar"}[tipo],
             "Und": codigo(campo("und")), "Qtd": numero(campo("qtd")), "Preco_Unitario": numero(campo("preco")),
         })
 
