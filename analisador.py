@@ -36,7 +36,11 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo, ativar_limpeza=True):
         
         dados = []
         log_erros_parse = []
+        # A exportação do OrçaFascio é sequencial: cada bloco iniciado por
+        # "Composição" é uma CPU principal e as linhas seguintes (Insumo ou
+        # ComposiçãoAuxiliar) são seus subitens diretos.
         cod_pai_atual, desc_pai_atual = None, ""
+        cod_cpu_raiz = None
         ordem_sequencial = 0
         
         in_orse_detail = False
@@ -69,6 +73,7 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo, ativar_limpeza=True):
                 
             if any('mo sem ls' in x for x in row_lower) or any('valor do bdi' in x for x in row_lower):
                 cod_pai_atual = None
+                cod_cpu_raiz = None
                 is_sicro_section = False
                 in_orse_detail = False
                 skip_items = False
@@ -76,6 +81,7 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo, ativar_limpeza=True):
                 
             if re.match(r'^\d+\.\d+$', col0):
                 cod_pai_atual = None
+                cod_cpu_raiz = None
                 is_sicro_section = False
                 in_orse_detail = False
                 skip_items = False
@@ -151,19 +157,31 @@ def carregar_orcafascio(arquivo_bytes, nome_arquivo, ativar_limpeza=True):
                         qtd_valor = parse_number(row_list[col_quant]) if col_quant < len(row_list) else 0.0
                         preco_valor = parse_number(row_list[col_preco]) if col_preco < len(row_list) else 0.0
 
-                    pai_da_linha = cod_pai_atual if cod_pai_atual else cod_item
-                    desc_pai_da_linha = desc_pai_atual if cod_pai_atual else desc_item
+                    tipo_item = 'INSUMO'
+                    # Uma composição normal inicia uma CPU.  A composição
+                    # auxiliar é um subitem da CPU, não o pai das próximas
+                    # linhas: o OrçaFascio já a exporta de forma plana.
+                    if col0 in ['composição', 'composicao']:
+                        tipo_item = 'COMPOSICAO_PRINCIPAL'
+                        cod_cpu_raiz, cod_pai_atual = cod_item, cod_item
+                        desc_pai_atual = desc_item
+                    elif col0 in ['composição auxiliar', 'composicao auxiliar']:
+                        tipo_item = 'COMPOSICAO_AUXILIAR'
+                        if cod_cpu_raiz is None:
+                            cod_cpu_raiz = cod_item
+
+                    pai_direto = cod_pai_atual if cod_pai_atual else cod_item
+                    desc_pai_direto = desc_pai_atual if cod_pai_atual else desc_item
+                    cpu_raiz_linha = cod_cpu_raiz if cod_cpu_raiz else cod_item
                     
                     ordem_sequencial += 1
                     dados.append({
-                        'Ordem': ordem_sequencial, 'Servico_Pai': pai_da_linha, 'Descricao_Pai': desc_pai_da_linha,
+                        'Ordem': ordem_sequencial, 'Servico_Pai': cpu_raiz_linha, 'Descricao_Pai': desc_pai_direto,
+                        'Pai_Direto': pai_direto, 'Tipo_Item': tipo_item,
                         'Insumo_Filho': cod_item, 'Descricao_Filho': desc_item, 'Und': und_item,
                         'Qtd': qtd_valor, 'Preco_Unitario': preco_valor, 'Status_Parsing': 'OK'
                     })
                     
-                    if col0 in ['composição', 'composicao'] and cod_pai_atual is None:
-                        cod_pai_atual = cod_item
-                        desc_pai_atual = desc_item
                     
         df_final = pd.DataFrame(dados)
         if df_final.empty: return None, f"Planilha {nome_arquivo}: Nenhum dado válido extraído.", None
@@ -274,7 +292,7 @@ def estilizar_relatorio_raw(row):
 # 3. MOTOR EXPORTADOR EXCEL MULTI-ABA
 # ==========================================
 
-def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrados_base, df_nao_encontrados_prop, df_parsing, df_db_base, df_db_prop):
+def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrados_base, df_nao_encontrados_prop, df_realocados, df_parsing, df_db_base, df_db_prop):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         
@@ -284,6 +302,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
             
         df_nao_encontrados_base.to_excel(writer, index=False, sheet_name='📍 Não Encontrados na Base', startrow=1)
         df_nao_encontrados_prop.to_excel(writer, index=False, sheet_name='📍 Omitidos na Proposta', startrow=1)
+        df_realocados.to_excel(writer, index=False, sheet_name='🔀 Realocados / Estrutura Divergente', startrow=1)
         df_parsing.to_excel(writer, index=False, sheet_name='📝 Log de Erros de Parsing', startrow=1)
         df_db_base.to_excel(writer, index=False, sheet_name='🗄️ DB Base', startrow=1)
         df_db_prop.to_excel(writer, index=False, sheet_name='🗄️ DB Proposta', startrow=1)
@@ -416,7 +435,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
             if name in ['📋 Matriz Completa', '🚨 Inconformidades']:
                 injetar_legenda(ws)
                 linha_cabecalho = 9
-            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🗄️ DB Base', '🗄️ DB Proposta', '📝 Log de Erros de Parsing']:
+            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🔀 Realocados / Estrutura Divergente', '🗄️ DB Base', '🗄️ DB Proposta', '📝 Log de Erros de Parsing']:
                 linha_cabecalho = 2
             else:
                 linha_cabecalho = 1
@@ -456,7 +475,7 @@ def gerar_excel_bytes(dash_data, df_matriz, df_inconformidades, df_nao_encontrad
                     if v_preco < limiar_desconto and col_var_preco: ws.cell(row=r_idx, column=col_var_preco).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
                     if v_total < limiar_desconto and col_var_total: ws.cell(row=r_idx, column=col_var_total).fill = PatternFill(start_color='FDBA74', end_color='FDBA74', fill_type="solid")
 
-            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🗄️ DB Base', '🗄️ DB Proposta']:
+            elif name in ['📍 Não Encontrados na Base', '📍 Omitidos na Proposta', '🔀 Realocados / Estrutura Divergente', '🗄️ DB Base', '🗄️ DB Proposta']:
                 for r_idx in range(linha_cabecalho + 1, ws.max_row + 1):
                     if 'COMPOSIÇÃO' in safe_str(ws.cell(row=r_idx, column=2).value):
                         for c_idx in range(1, ws.max_column + 1):
@@ -528,16 +547,18 @@ if arquivo_base and arquivo_proposta:
         if df_base_raw is not None and df_prop_raw is not None:           
             
             # AGRUPAMENTO HIERÁRQUICO - O CORAÇÃO DA AUDITORIA
-            cols_agrupamento = ['Servico_Pai', 'Insumo_Filho']
+            # A chave inclui o pai direto: o mesmo insumo pode existir em
+            # composições auxiliares diferentes dentro da mesma CPU.
+            cols_agrupamento = ['Servico_Pai', 'Pai_Direto', 'Insumo_Filho']
             
             df_base = df_base_raw.groupby(cols_agrupamento).agg({
                 'Qtd': 'sum', 'Preco_Unitario': 'mean', 'Und': 'first',
-                'Descricao_Pai': 'first', 'Descricao_Filho': 'first', 'Ordem': 'min'
+                'Descricao_Pai': 'first', 'Descricao_Filho': 'first', 'Tipo_Item': 'first', 'Ordem': 'min'
             }).reset_index()
             
             df_prop = df_prop_raw.groupby(cols_agrupamento).agg({
                 'Qtd': 'sum', 'Preco_Unitario': 'mean', 'Und': 'first',
-                'Descricao_Pai': 'first', 'Descricao_Filho': 'first', 'Ordem': 'min'
+                'Descricao_Pai': 'first', 'Descricao_Filho': 'first', 'Tipo_Item': 'first', 'Ordem': 'min'
             }).reset_index()
             
             df_merged = pd.merge(
@@ -549,10 +570,25 @@ if arquivo_base and arquivo_proposta:
             )
             
             idx_right_only = df_merged[df_merged['_merge'] == 'right_only'].set_index(cols_agrupamento).index
-            df_nao_encontrados_base = df_prop_raw[df_prop_raw.set_index(cols_agrupamento).index.isin(idx_right_only)].drop_duplicates(subset=cols_agrupamento).reset_index(drop=True)
+            candidatos_adicionados = df_prop_raw[df_prop_raw.set_index(cols_agrupamento).index.isin(idx_right_only)].drop_duplicates(subset=cols_agrupamento).reset_index(drop=True)
             
             idx_left_only = df_merged[df_merged['_merge'] == 'left_only'].set_index(cols_agrupamento).index
-            df_nao_encontrados_prop = df_base_raw[df_base_raw.set_index(cols_agrupamento).index.isin(idx_left_only)].drop_duplicates(subset=cols_agrupamento).reset_index(drop=True)
+            candidatos_ausentes = df_base_raw[df_base_raw.set_index(cols_agrupamento).index.isin(idx_left_only)].drop_duplicates(subset=cols_agrupamento).reset_index(drop=True)
+
+            # Não trate como omissão um código que ainda exista na proposta:
+            # ele foi realocado (ou a estrutura da CPU foi alterada).  Só é
+            # omitido de fato quando não existe em nenhuma CPU da proposta.
+            codigos_prop = set(df_prop_raw['Insumo_Filho'].astype(str).str.upper())
+            codigos_base = set(df_base_raw['Insumo_Filho'].astype(str).str.upper())
+            df_realocados = candidatos_ausentes[
+                candidatos_ausentes['Insumo_Filho'].astype(str).str.upper().isin(codigos_prop)
+            ].copy()
+            df_nao_encontrados_prop = candidatos_ausentes[
+                ~candidatos_ausentes['Insumo_Filho'].astype(str).str.upper().isin(codigos_prop)
+            ].copy()
+            df_nao_encontrados_base = candidatos_adicionados[
+                ~candidatos_adicionados['Insumo_Filho'].astype(str).str.upper().isin(codigos_base)
+            ].copy()
             
             df_auditoria = df_merged[df_merged['_merge'] == 'both'].copy()
             
@@ -589,6 +625,7 @@ if arquivo_base and arquivo_proposta:
             
             df_visual_ne_base = transformar_hierarquico_raw(df_nao_encontrados_base)
             df_visual_ne_prop = transformar_hierarquico_raw(df_nao_encontrados_prop)
+            df_visual_realocados = transformar_hierarquico_raw(df_realocados)
             df_visual_db_base = transformar_hierarquico_raw(df_base_raw)
             df_visual_db_prop = transformar_hierarquico_raw(df_prop_raw)
             
@@ -628,7 +665,7 @@ if arquivo_base and arquivo_proposta:
             
             df_parsing_excel = pd.DataFrame(columns=['Origem', 'Código', 'Descrição', 'Erro'])
             
-            excel_bytes = gerar_excel_bytes(dash_data_excel, df_visual_completo, df_visual_erros, df_visual_ne_base, df_visual_ne_prop, df_parsing_excel, df_visual_db_base, df_visual_db_prop)
+            excel_bytes = gerar_excel_bytes(dash_data_excel, df_visual_completo, df_visual_erros, df_visual_ne_base, df_visual_ne_prop, df_visual_realocados, df_parsing_excel, df_visual_db_base, df_visual_db_prop)
             
             formato_tela = {'Qtd_Base': '{:.4f}', 'Qtd_Prop': '{:.4f}', 'Delta_Qtd': '{:.4f}', 'Preco_Base': 'R$ {:.2f}', 'Preco_Prop': 'R$ {:.2f}', 'Delta_Preco': 'R$ {:.2f}', 'Var_Preco_%': '{:.2%}', 'Total_Base': 'R$ {:.2f}', 'Total_Prop': 'R$ {:.2f}', 'Delta_Total': 'R$ {:.2f}', 'Var_Total_%': '{:.2%}'}
             formato_tela_raw = {'Quantidade': '{:.4f}', 'Preço Unitário': 'R$ {:.2f}', 'Total': 'R$ {:.2f}'}
@@ -638,10 +675,11 @@ if arquivo_base and arquivo_proposta:
             
             styler_ui_ne_base = df_visual_ne_base.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1) if not df_visual_ne_base.empty else None
             styler_ui_ne_prop = df_visual_ne_prop.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1) if not df_visual_ne_prop.empty else None
+            styler_ui_realocados = df_visual_realocados.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1) if not df_visual_realocados.empty else None
             styler_ui_db_base = df_visual_db_base.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1)
             styler_ui_db_prop = df_visual_db_prop.style.format(formato_tela_raw, na_rep="").apply(estilizar_relatorio_raw, axis=1)
             
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📊 Dashboard KPI", "📋 Matriz Completa", "🚨 Inconformidades", "📍 Não Encontrados na Base", "📍 Omitidos na Proposta", "📝 Log de Erros de Parsing", "🗄️ DB Base", "🗄️ DB Proposta"])
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["📊 Dashboard KPI", "📋 Matriz Completa", "🚨 Inconformidades", "📍 Não Encontrados na Base", "📍 Omitidos na Proposta", "🔀 Realocados / Estrutura", "📝 Log de Erros de Parsing", "🗄️ DB Base", "🗄️ DB Proposta"])
             
             with tab1:
                 st.subheader("📊 Painel Analítico de Conformidade Contratual")
@@ -694,6 +732,10 @@ if arquivo_base and arquivo_proposta:
             with tab5:
                 if styler_ui_ne_prop is not None: st.dataframe(styler_ui_ne_prop, height=500, use_container_width=True)
                 else: st.success("✅ Alinhamento Completo!")
-            with tab6: st.success("✅ Zero erros estruturais identificados.")
-            with tab7: st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
-            with tab8: st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
+            with tab6:
+                st.caption("Itens existentes na proposta, mas em outra ramificação/composição da CPU. Não são omitidos de fato.")
+                if styler_ui_realocados is not None: st.dataframe(styler_ui_realocados, height=500, use_container_width=True)
+                else: st.success("✅ Nenhuma realocação estrutural identificada.")
+            with tab7: st.success("✅ Zero erros estruturais identificados.")
+            with tab8: st.dataframe(styler_ui_db_base, height=600, use_container_width=True)
+            with tab9: st.dataframe(styler_ui_db_prop, height=600, use_container_width=True)
