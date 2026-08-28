@@ -210,17 +210,62 @@ def estilizar(linha):
     return estilos
 
 
+def calcular_metricas(auditado, inconformidades, omitidos, realocados, limiar):
+    total_base = float(auditado["Total_Base"].sum())
+    total_prop = float(auditado["Total_Prop"].sum())
+    total_itens = len(auditado)
+    sobrepreco = float(auditado.loc[auditado["Delta_Total"] > 0, "Delta_Total"].sum())
+    inexequivel = float(abs(auditado.loc[auditado["Var_Total_%"] < limiar, "Delta_Total"].sum()))
+    return {
+        "total_itens": total_itens,
+        "total_base": total_base,
+        "total_prop": total_prop,
+        "variacao_geral": total_prop / total_base - 1 if total_base else 0.0,
+        "conformidade": (total_itens - len(inconformidades)) / total_itens if total_itens else 0.0,
+        "sobrepreco": sobrepreco,
+        "inexequivel": inexequivel,
+        "maior_desvio": float(auditado["Delta_Total"].max()) if total_itens else 0.0,
+        "omitidos": len(omitidos),
+        "realocados": len(realocados),
+    }
+
+
 def formatar_aba(ws, cabecalho):
     borda = Border(left=Side(style="thin", color="CBD5E1"), right=Side(style="thin", color="CBD5E1"), top=Side(style="thin", color="CBD5E1"), bottom=Side(style="thin", color="CBD5E1"))
     for celula in ws[cabecalho]:
         celula.font, celula.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="1E293B")
         celula.alignment, celula.border = Alignment(horizontal="center", vertical="center", wrap_text=True), borda
+    mapa = {str(ws.cell(cabecalho, coluna).value or ""): coluna for coluna in range(1, ws.max_column + 1)}
+    if cabecalho == 9:
+        legendas = [
+            ("A1", "FCA5A5", "🟥 Vermelho: sobrepreço."),
+            ("A2", "E9D5FF", "🟪 Roxo: quantidade alterada."),
+            ("A3", "FDBA74", "🟧 Laranja: desconto excessivo."),
+            ("A4", "FEF08A", "🟨 Amarelo: unidade incompatível."),
+            ("A5", "DBEAFE", "🟦 Azul: composição principal."),
+        ]
+        for endereco, cor, mensagem in legendas:
+            ws[endereco] = mensagem
+            ws[endereco].fill = PatternFill("solid", fgColor=cor)
+            ws[endereco].font = Font(bold=True, size=9)
     for linha in ws.iter_rows(min_row=cabecalho + 1):
         if len(linha) > 1 and str(linha[1].value or "").startswith("COMPOSIÇÃO:"):
             for celula in linha:
                 celula.fill, celula.font = PatternFill("solid", fgColor="DBEAFE"), Font(bold=True, color="1E3A8A")
         for celula in linha:
             celula.border = borda
+        if cabecalho == 9 and not str(linha[1].value or "").startswith("COMPOSIÇÃO:"):
+            def pintar(nome, cor):
+                coluna = mapa.get(nome)
+                if coluna:
+                    ws.cell(linha[0].row, coluna).fill = PatternFill("solid", fgColor=cor)
+            if mapa.get("Und_Base") and mapa.get("Und_Prop"):
+                und_base, und_prop = ws.cell(linha[0].row, mapa["Und_Base"]).value, ws.cell(linha[0].row, mapa["Und_Prop"]).value
+                if und_base and und_prop and und_base != und_prop:
+                    pintar("Und_Base", "FEF08A"); pintar("Und_Prop", "FEF08A")
+            if mapa.get("Delta_Qtd") and (ws.cell(linha[0].row, mapa["Delta_Qtd"]).value or 0) != 0: pintar("Delta_Qtd", "E9D5FF")
+            for nome in ["Delta_Preco", "Delta_Total", "Var_Preco_%", "Var_Total_%"]:
+                if mapa.get(nome) and (ws.cell(linha[0].row, mapa[nome]).value or 0) > 0: pintar(nome, "FCA5A5")
     for coluna in range(1, ws.max_column + 1):
         largura = max(len(str(ws.cell(linha, coluna).value or "")) for linha in range(1, ws.max_row + 1))
         ws.column_dimensions[get_column_letter(coluna)].width = min(max(largura + 2, 11), 65)
@@ -228,6 +273,7 @@ def formatar_aba(ws, cabecalho):
 
 
 def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base, prop, log, limiar):
+def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base, prop, log, limiar, metricas):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         matriz.to_excel(writer, index=False, sheet_name="Matriz Completa", startrow=8)
@@ -245,11 +291,23 @@ def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base
         painel["B2"] = "PAINEL ANALITICO DE CONFORMIDADE CONTRATUAL"
         painel["B2"].font, painel["B2"].fill = Font(size=16, bold=True, color="FFFFFF"), PatternFill("solid", fgColor="0F172A")
         painel["B2"].alignment = Alignment(horizontal="center", vertical="center")
+        cards = [
+            ("ITENS AUDITADOS", metricas["total_itens"], "int"),
+            ("SALDO DO ORÇAMENTO", metricas["total_prop"], "money"),
+            ("TAXA DE CONFORMIDADE", metricas["conformidade"], "percent"),
+            ("RISCO SOBREPREÇO", metricas["sobrepreco"], "money"),
+            ("DESCONTO OCULTO", metricas["inexequivel"], "money"),
+            ("MAIOR DESVIO ÚNICO", metricas["maior_desvio"], "money"),
         metricas = [("ITENS AUDITADOS", len(auditado)), ("OMITIDOS REAIS", len(omitidos)), ("REALOCADOS", len(realocados)), ("LIMIAR DE DESCONTO", limiar)]
         for indice, (titulo, valor) in enumerate(metricas):
             coluna, linha = 2 + (indice % 2) * 4, 5 + (indice // 2) * 4
             painel.merge_cells(start_row=linha, start_column=coluna, end_row=linha, end_column=coluna + 2)
             painel.merge_cells(start_row=linha + 1, start_column=coluna, end_row=linha + 2, end_column=coluna + 2)
+        ]
+        for indice, (titulo, valor, formato) in enumerate(cards):
+            coluna, linha = 2 + (indice % 3) * 3, 5 + (indice // 3) * 4
+            painel.merge_cells(start_row=linha, start_column=coluna, end_row=linha, end_column=coluna + 1)
+            painel.merge_cells(start_row=linha + 1, start_column=coluna, end_row=linha + 2, end_column=coluna + 1)
             painel.cell(linha, coluna, titulo).fill = PatternFill("solid", fgColor="334155")
             painel.cell(linha, coluna).font = Font(bold=True, color="FFFFFF")
             painel.cell(linha, coluna).alignment = Alignment(horizontal="center")
@@ -257,6 +315,8 @@ def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base
             painel.cell(linha + 1, coluna).alignment = Alignment(horizontal="center", vertical="center")
             if indice == 3:
                 painel.cell(linha + 1, coluna).number_format = "0%"
+            if formato == "percent": painel.cell(linha + 1, coluna).number_format = "0.0%"
+            elif formato == "money": painel.cell(linha + 1, coluna).number_format = '"R$" #,##0.00'
         for letra in "BCDEFGHIJ": painel.column_dimensions[letra].width = 18
         for nome in wb.sheetnames:
             if nome != "Dashboard KPI": formatar_aba(wb[nome], 9 if nome in {"Matriz Completa", "Inconformidades"} else 2)
@@ -271,6 +331,17 @@ def main():
         st.session_state.limiar = st.slider("Limiar de Desconto (Inexequibilidade)", -50, -5, -25, 1) / 100
         higienizar = st.checkbox("🧹 Higienizar dados", value=True)
         st.info("CPUs são lidas com insumos e composições auxiliares. Itens em outra CPU são realocados, não omitidos.")
+        st.success(f"📌 Limiar configurado: {st.session_state.limiar:.0%}")
+        st.divider()
+        st.subheader("📌 Legenda de Auditoria")
+        st.markdown("""
+        <div style="padding:8px;margin-bottom:5px;border-radius:5px;background:#fca5a5;color:#7f1d1d"><b>🟥 Vermelho</b><br>Sobrepreço na proposta.</div>
+        <div style="padding:8px;margin-bottom:5px;border-radius:5px;background:#e9d5ff;color:#6b21a8"><b>🟪 Roxo</b><br>Quantidade alterada.</div>
+        <div style="padding:8px;margin-bottom:5px;border-radius:5px;background:#fdba74;color:#7c2d12"><b>🟧 Laranja</b><br>Desconto excessivo.</div>
+        <div style="padding:8px;margin-bottom:5px;border-radius:5px;background:#fef08a;color:#713f12"><b>🟨 Amarelo</b><br>Unidade incompatível.</div>
+        <div style="padding:8px;margin-bottom:5px;border-radius:5px;background:#dbeafe;color:#1e3a8a"><b>🟦 Azul</b><br>Composição principal.</div>
+        """, unsafe_allow_html=True)
+        st.caption("Itens em outra CPU são realocados, não omitidos.")
     st.title("🛡️ Auditoria de Orçamentos PRO")
     st.markdown("Validação paramétrica de CPUs do OrçaFascio.")
     col1, col2 = st.columns(2)
@@ -289,7 +360,9 @@ def main():
     inconformidades = auditado[filtro_preco | filtro_qtd | filtro_und | filtro_inex].copy()
     matriz, tabela_erros = hierarquia(auditado, True), hierarquia(inconformidades, True)
     log = pd.concat([log_base, log_prop], ignore_index=True)
+    metricas = calcular_metricas(auditado, inconformidades, omitidos, realocados, st.session_state.limiar)
     excel = gerar_excel(auditado, matriz, tabela_erros, omitidos, adicionados, realocados, base, prop, log, st.session_state.limiar)
+    excel = gerar_excel(auditado, matriz, tabela_erros, omitidos, adicionados, realocados, base, prop, log, st.session_state.limiar, metricas)
     formato = {"Qtd_Base": "{:.4f}", "Qtd_Prop": "{:.4f}", "Delta_Qtd": "{:.4f}", "Preco_Base": "R$ {:.2f}", "Preco_Prop": "R$ {:.2f}", "Delta_Preco": "R$ {:.2f}", "Var_Preco_%": "{:.2%}", "Total_Base": "R$ {:.2f}", "Total_Prop": "R$ {:.2f}", "Delta_Total": "R$ {:.2f}", "Var_Total_%": "{:.2%}"}
     tabs = st.tabs(["📊 Dashboard KPI", "📋 Matriz Completa", "🚨 Inconformidades", "📍 Omitidos Reais", "🔀 Realocados", "📍 Adicionados", "📝 Log", "🗄️ DB Base", "🗄️ DB Proposta"])
     with tabs[0]:
@@ -297,6 +370,40 @@ def main():
         a.metric("Itens auditados", len(auditado), f"{len(inconformidades)} divergências")
         b.metric("Omitidos reais", len(omitidos), "código ausente na proposta")
         c.metric("Realocados", len(realocados), "código em outra CPU")
+        a.metric("📌 Volume de Itens Auditados", f"{metricas['total_itens']:,}", f"{len(inconformidades)} desvios sinalizados")
+        b.metric("💰 Saldo Global do Orçamento", f"R$ {metricas['total_prop']:,.2f}", f"Variação: {metricas['variacao_geral']:+.2%}", delta_color="inverse")
+        c.metric("✅ Índice de Acerto Paramétrico", f"{metricas['conformidade']:.1%}", "Meta aceitável: > 95%")
+        d, e, f = st.columns(3)
+        d.metric("🚨 Exposição a Sobrepreço", f"R$ {metricas['sobrepreco']:,.2f}", delta_color="inverse")
+        e.metric("📉 Desconto Ofertado Oculto", f"R$ {metricas['inexequivel']:,.2f}")
+        f.metric("🎯 Maior Desvio Único", f"R$ {metricas['maior_desvio']:,.2f}")
+        st.divider()
+        grafico1, grafico2 = st.columns(2)
+        with grafico1:
+            st.markdown("##### 🔢 Ocorrências por Tipologia")
+            contagens = pd.Series({"Sobrepreço": int(filtro_preco.sum()), "Qtd. alterada": int(filtro_qtd.sum()), "Unidade incompatível": int(filtro_und.sum()), "Inexequível": int(filtro_inex.sum()), "Omitidos reais": len(omitidos), "Realocados": len(realocados)})
+            st.bar_chart(contagens, height=280)
+        with grafico2:
+            st.markdown("##### 💸 Impacto Financeiro Líquido")
+            impactos = pd.Series({"Sobrepreço": metricas["sobrepreco"], "Descontos extremos": metricas["inexequivel"], "Variação global": metricas["total_prop"] - metricas["total_base"]})
+            st.bar_chart(impactos, height=280)
+        st.divider()
+        esquerda, direita = st.columns(2)
+        with esquerda:
+            st.markdown("##### 🔺 Top 5 impactos de sobrepreço")
+            top_sobre = auditado[auditado["Delta_Total"] > 0].nlargest(5, "Delta_Total")[["Codigo", "Descricao", "Delta_Total", "Var_Total_%"]]
+            if top_sobre.empty:
+                st.success("Nenhum sobrepreço mapeado.")
+            else:
+                st.dataframe(top_sobre.style.format({"Delta_Total": "R$ {:.2f}", "Var_Total_%": "{:+.2%}"}), hide_index=True, use_container_width=True)
+        with direita:
+            st.markdown("##### 🔻 Top 5 riscos de inexequibilidade")
+            top_inex = auditado[filtro_inex].nsmallest(5, "Delta_Total")[["Codigo", "Descricao", "Delta_Total", "Var_Total_%"]]
+            if top_inex.empty:
+                st.info("Nenhuma anomalia de desconto extremo encontrada.")
+            else:
+                st.dataframe(top_inex.style.format({"Delta_Total": "R$ {:.2f}", "Var_Total_%": "{:.2%}"}), hide_index=True, use_container_width=True)
+        st.divider()
         st.download_button("📥 Baixar Laudo de Auditoria (.XLSX)", excel, "Laudo_Auditoria_PRO_Consolidado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with tabs[1]: st.dataframe(matriz.style.format(formato, na_rep="").apply(estilizar, axis=1), height=600, use_container_width=True)
     with tabs[2]: st.dataframe(tabela_erros.style.format(formato, na_rep="").apply(estilizar, axis=1), height=600, use_container_width=True)
