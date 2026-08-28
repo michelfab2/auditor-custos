@@ -272,9 +272,9 @@ def formatar_aba(ws, cabecalho):
     ws.freeze_panes = f"A{cabecalho + 1}"
 
 
-def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base, prop, log, limiar):
 def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base, prop, log, limiar, metricas):
     output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         matriz.to_excel(writer, index=False, sheet_name="Matriz Completa", startrow=8)
         erros.to_excel(writer, index=False, sheet_name="Inconformidades", startrow=8)
