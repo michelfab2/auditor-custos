@@ -303,8 +303,15 @@ def main():
     for aba, dados, mensagem in [(tabs[3], omitidos, "Nenhum item realmente omitido."), (tabs[4], realocados, "Nenhum item realocado."), (tabs[5], adicionados, "Nenhum item adicionado.")]:
         with aba:
             visual = hierarquia(dados)
-            st.dataframe(visual, height=600, use_container_width=True) if not visual.empty else st.success(f"✅ {mensagem}")
-    with tabs[6]: st.dataframe(log, use_container_width=True) if not log.empty else st.success("✅ Sem erros de leitura.")
+            if visual.empty:
+                st.success(f"✅ {mensagem}")
+            else:
+                st.dataframe(visual, height=600, use_container_width=True)
+    with tabs[6]:
+        if log.empty:
+            st.success("✅ Sem erros de leitura.")
+        else:
+            st.dataframe(log, use_container_width=True)
     with tabs[7]: st.dataframe(hierarquia(base), height=600, use_container_width=True)
     with tabs[8]: st.dataframe(hierarquia(prop), height=600, use_container_width=True)
 
