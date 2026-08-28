@@ -271,8 +271,6 @@ def formatar_aba(ws, cabecalho):
         ws.column_dimensions[get_column_letter(coluna)].width = min(max(largura + 2, 11), 65)
     ws.freeze_panes = f"A{cabecalho + 1}"
 
-
-def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base, prop, log, limiar):
 def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base, prop, log, limiar, metricas):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
