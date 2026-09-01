@@ -404,13 +404,14 @@ def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base
             painel.cell(linha + 1, coluna).alignment = Alignment(horizontal="center", vertical="center")
             if formato == "percent": painel.cell(linha + 1, coluna).number_format = "0.0%"
             elif formato == "money": painel.cell(linha + 1, coluna).number_format = '"R$" #,##0.00'
-        for letra in "BCDEFGHIJ": painel.column_dimensions[letra].width = 18
-               for nome in wb.sheetnames:
+        for letra in "BCDEFGHIJ":
+            painel.column_dimensions[letra].width = 18
+        for nome in wb.sheetnames:
             if nome != "Dashboard KPI":
                 formatar_aba(
                     wb[nome],
                     9 if nome in {"Matriz Completa", "Inconformidades"} else 2,
-                    limiar,  # >>> ADIÇÃO: repassar o limiar
+                    limiar,
                 )
     return output.getvalue()
 
