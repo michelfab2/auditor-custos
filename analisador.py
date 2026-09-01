@@ -249,12 +249,39 @@ def calcular_metricas(auditado, inconformidades, omitidos, realocados, limiar):
     }
 
 
-def formatar_aba(ws, cabecalho):
-    borda = Border(left=Side(style="thin", color="CBD5E1"), right=Side(style="thin", color="CBD5E1"), top=Side(style="thin", color="CBD5E1"), bottom=Side(style="thin", color="CBD5E1"))
+def formatar_aba(ws, cabecalho, limiar=-0.25):
+    borda = Border(left=Side(style="thin", color="CBD5E1"),
+                   right=Side(style="thin", color="CBD5E1"),
+                   top=Side(style="thin", color="CBD5E1"),
+                   bottom=Side(style="thin", color="CBD5E1"))
+
+    # Cabeçalho
     for celula in ws[cabecalho]:
-        celula.font, celula.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="1E293B")
-        celula.alignment, celula.border = Alignment(horizontal="center", vertical="center", wrap_text=True), borda
-    mapa = {str(ws.cell(cabecalho, coluna).value or ""): coluna for coluna in range(1, ws.max_column + 1)}
+        celula.font = Font(bold=True, color="FFFFFF")
+        celula.fill = PatternFill("solid", fgColor="1E293B")
+        celula.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        celula.border = borda
+
+    mapa = {str(ws.cell(cabecalho, coluna).value or ""): coluna
+            for coluna in range(1, ws.max_column + 1)}
+
+    # >>> ADIÇÃO: mapear formatos numéricos por nome de coluna (igual ao Streamlit)
+    formatos_numero = {
+        "Qtd_Base": "0.0000", "Qtd_Prop": "0.0000", "Delta_Qtd": "+0.0000;-0.0000;0.0000",
+        "Preco_Base": '"R$" #,##0.00', "Preco_Prop": '"R$" #,##0.00',
+        "Delta_Preco": '+"R$" #,##0.00;-"R$" #,##0.00;"R$" #,##0.00',
+        "Total_Base": '"R$" #,##0.00', "Total_Prop": '"R$" #,##0.00',
+        "Delta_Total": '+"R$" #,##0.00;-"R$" #,##0.00;"R$" #,##0.00',
+        "Var_Preco_%": "+0.00%;-0.00%;0.00%",
+        "Var_Total_%": "+0.00%;-0.00%;0.00%",
+        # Abas não-auditoria (DB Base / DB Proposta / Omitidos / etc.)
+        "Quantidade": "0.0000",
+        "Preço Unitário": '"R$" #,##0.00',
+        "Total": '"R$" #,##0.00',
+    }
+    # <<< ADIÇÃO
+
+    # Legenda (somente abas de auditoria com cabeçalho na linha 9)
     if cabecalho == 9:
         legendas = [
             ("A1", "FCA5A5", "🟥 Vermelho: sobrepreço."),
@@ -267,27 +294,76 @@ def formatar_aba(ws, cabecalho):
             ws[endereco] = mensagem
             ws[endereco].fill = PatternFill("solid", fgColor=cor)
             ws[endereco].font = Font(bold=True, size=9)
+
     for linha in ws.iter_rows(min_row=cabecalho + 1):
-        if len(linha) > 1 and str(linha[1].value or "").startswith("COMPOSIÇÃO:"):
+        is_composicao = len(linha) > 1 and str(linha[1].value or "").startswith("COMPOSIÇÃO:")
+
+        # Linha de composição principal (azul)
+        if is_composicao:
             for celula in linha:
-                celula.fill, celula.font = PatternFill("solid", fgColor="DBEAFE"), Font(bold=True, color="1E3A8A")
+                celula.fill = PatternFill("solid", fgColor="DBEAFE")
+                celula.font = Font(bold=True, color="1E3A8A")
+
+        # Borda + number_format
         for celula in linha:
             celula.border = borda
-        if cabecalho == 9 and not str(linha[1].value or "").startswith("COMPOSIÇÃO:"):
-            def pintar(nome, cor):
+            if is_composicao:
+                continue
+            header = str(ws.cell(cabecalho, celula.column).value or "")
+            if header in formatos_numero and isinstance(celula.value, (int, float)):
+                celula.number_format = formatos_numero[header]
+                # Alinhar números à direita
+                celula.alignment = Alignment(horizontal="right")
+
+        # Formatação condicional (somente abas auditoria)
+        if cabecalho == 9 and not is_composicao:
+            def pintar(nome, cor, fonte=None):
                 coluna = mapa.get(nome)
                 if coluna:
-                    ws.cell(linha[0].row, coluna).fill = PatternFill("solid", fgColor=cor)
+                    cell = ws.cell(linha[0].row, coluna)
+                    cell.fill = PatternFill("solid", fgColor=cor)
+                    if fonte:
+                        cell.font = fonte
+
+            fonte_negrito = Font(bold=True)
+
+            # Amarelo: unidade incompatível
             if mapa.get("Und_Base") and mapa.get("Und_Prop"):
-                und_base, und_prop = ws.cell(linha[0].row, mapa["Und_Base"]).value, ws.cell(linha[0].row, mapa["Und_Prop"]).value
-                if und_base and und_prop and und_base != und_prop:
-                    pintar("Und_Base", "FEF08A"); pintar("Und_Prop", "FEF08A")
-            if mapa.get("Delta_Qtd") and (ws.cell(linha[0].row, mapa["Delta_Qtd"]).value or 0) != 0: pintar("Delta_Qtd", "E9D5FF")
+                und_b = ws.cell(linha[0].row, mapa["Und_Base"]).value
+                und_p = ws.cell(linha[0].row, mapa["Und_Prop"]).value
+                if und_b and und_p and str(und_b) != str(und_p):
+                    pintar("Und_Base", "FEF08A", fonte_negrito)
+                    pintar("Und_Prop", "FEF08A", fonte_negrito)
+
+            # Roxo: quantidade alterada
+            if mapa.get("Delta_Qtd"):
+                v = ws.cell(linha[0].row, mapa["Delta_Qtd"]).value
+                if isinstance(v, (int, float)) and v != 0:
+                    pintar("Delta_Qtd", "E9D5FF", fonte_negrito)
+
+            # Vermelho: sobrepreço (Delta_Preco, Delta_Total, Var_% > 0)
             for nome in ["Delta_Preco", "Delta_Total", "Var_Preco_%", "Var_Total_%"]:
-                if mapa.get(nome) and (ws.cell(linha[0].row, mapa[nome]).value or 0) > 0: pintar(nome, "FCA5A5")
+                if mapa.get(nome):
+                    v = ws.cell(linha[0].row, mapa[nome]).value
+                    if isinstance(v, (int, float)) and v > 0:
+                        pintar(nome, "FCA5A5", fonte_negrito)
+
+            # >>> ADIÇÃO: Laranja: desconto excessivo (Var_% < limiar)
+            for nome in ["Var_Preco_%", "Var_Total_%"]:
+                if mapa.get(nome):
+                    v = ws.cell(linha[0].row, mapa[nome]).value
+                    if isinstance(v, (int, float)) and v < limiar:
+                        pintar(nome, "FDBA74", fonte_negrito)
+            # <<< ADIÇÃO
+
+    # Largura automática das colunas
     for coluna in range(1, ws.max_column + 1):
-        largura = max(len(str(ws.cell(linha, coluna).value or "")) for linha in range(1, ws.max_row + 1))
+        largura = max(
+            (len(str(ws.cell(r, coluna).value or "")) for r in range(1, ws.max_row + 1)),
+            default=10,
+        )
         ws.column_dimensions[get_column_letter(coluna)].width = min(max(largura + 2, 11), 65)
+
     ws.freeze_panes = f"A{cabecalho + 1}"
 
 
@@ -329,8 +405,13 @@ def gerar_excel(auditado, matriz, erros, omitidos, adicionados, realocados, base
             if formato == "percent": painel.cell(linha + 1, coluna).number_format = "0.0%"
             elif formato == "money": painel.cell(linha + 1, coluna).number_format = '"R$" #,##0.00'
         for letra in "BCDEFGHIJ": painel.column_dimensions[letra].width = 18
-        for nome in wb.sheetnames:
-            if nome != "Dashboard KPI": formatar_aba(wb[nome], 9 if nome in {"Matriz Completa", "Inconformidades"} else 2)
+               for nome in wb.sheetnames:
+            if nome != "Dashboard KPI":
+                formatar_aba(
+                    wb[nome],
+                    9 if nome in {"Matriz Completa", "Inconformidades"} else 2,
+                    limiar,  # >>> ADIÇÃO: repassar o limiar
+                )
     return output.getvalue()
 
 
