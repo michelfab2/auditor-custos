@@ -26,6 +26,7 @@ def rotulo(valor):
 
 def codigo(valor):
     txt = texto(valor).upper().replace(" ", "")
+    # Remove zeros à esquerda e sufixos de base para garantir o merge exato
     txt = re.sub(r"^0+", "", txt)
     return re.sub(r"/(SINAPI|ORSE|SICRO|SBC)$", "", txt)
 
@@ -75,11 +76,9 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
     mapa = {"cod": 1, "desc": 3, "und": 6, "qtd": 7, "preco": 8}
     itens, erros = [], []
     cpu, descricao_cpu, ordem = None, "", 0
-    # >>> ADIÇÃO 1: reconhecer "Atividade Auxiliar" (SETOP) como tipo válido
     tipos = {"composicao", "composicaoauxiliar", "insumo", "item", "atividadeauxiliar"}
-    # <<< ADIÇÃO 1
 
-for indice, linha in bruto.iterrows():
+    for indice, linha in bruto.iterrows():
         valores = [texto(valor) for valor in linha.tolist()]
         primeiro = valores[0] if valores else ""
         tipo = rotulo(primeiro)
@@ -88,21 +87,20 @@ for indice, linha in bruto.iterrows():
             cpu, descricao_cpu = None, ""
             mapa = localizar_colunas(valores, mapa)
             continue
-        # O restante do bloco também deve seguir a mesma margem
-      linha_texto = "".join(rotulo(v) for v in valores)
+        
+        linha_texto = "".join(rotulo(v) for v in valores)
         if "codigo" in linha_texto and "descricao" in linha_texto:
             mapa = localizar_colunas(valores, mapa)
             continue
-        # >>> ADIÇÃO 2: reconhecer cabeçalhos de seção A/B/F/G/H que invertem colunas
+        
         if len(tipo) == 1 and tipo in "abfgh":
             mapa = localizar_colunas(valores, mapa)
             continue
-        # <<< ADIÇÃO 2
-        # >>> ADIÇÃO 3: "Resumo" indica fim da CPU atual (separador de CPUs na Proposta)
+        
         if tipo == "resumo":
             cpu, descricao_cpu = None, ""
             continue
-        # <<< ADIÇÃO 3
+        
         if tipo not in tipos:
             continue
 
@@ -115,19 +113,19 @@ for indice, linha in bruto.iterrows():
         if not cod:
             erros.append({"Origem": origem, "Linha": indice + 1, "Tipo": tipo, "Erro": "Código vazio"})
             continue
-if tipo == "composicao":
+        
+        if tipo == "composicao":
             if cpu is None:
                 cpu, descricao_cpu = cod, desc
             else:
                 tipo = "composicaoauxiliar"
-        # >>> ADIÇÃO 4: quando não há Composição principal, tratar Insumo/Atividade como CPU autônoma
+        
         if cpu is None:
             if tipo in {"insumo", "composicaoauxiliar", "item", "atividadeauxiliar"}:
                 cpu, descricao_cpu = cod, desc
             else:
                 erros.append({"Origem": origem, "Linha": indice + 1, "Tipo": tipo, "Erro": "Subitem sem composição principal"})
                 continue
-        # <<< ADIÇÃO 4
 
         ordem += 1
         itens.append({
