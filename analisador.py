@@ -25,7 +25,9 @@ def rotulo(valor):
 
 
 def codigo(valor):
-    return texto(valor).upper().replace(" ", "")
+    txt = texto(valor).upper().replace(" ", "")
+    txt = re.sub(r"^0+", "", txt)
+    return re.sub(r"/(SINAPI|ORSE|SICRO|SBC)$", "", txt)
 
 
 def numero(valor):
@@ -86,7 +88,8 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
             cpu, descricao_cpu = None, ""
             mapa = localizar_colunas(valores, mapa)
             continue
-        if "codigo" in tipo or ("descricao" in tipo and "quant" in "".join(rotulo(v) for v in valores)):
+      linha_texto = "".join(rotulo(v) for v in valores)
+        if "codigo" in linha_texto and "descricao" in linha_texto:
             mapa = localizar_colunas(valores, mapa)
             continue
         # >>> ADIÇÃO 2: reconhecer cabeçalhos de seção A/B/F/G/H que invertem colunas
@@ -111,8 +114,11 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
         if not cod:
             erros.append({"Origem": origem, "Linha": indice + 1, "Tipo": tipo, "Erro": "Código vazio"})
             continue
-        if tipo == "composicao":
-            cpu, descricao_cpu = cod, desc
+if tipo == "composicao":
+            if cpu is None:
+                cpu, descricao_cpu = cod, desc
+            else:
+                tipo = "composicaoauxiliar"
         # >>> ADIÇÃO 4: quando não há Composição principal, tratar Insumo/Atividade como CPU autônoma
         if cpu is None:
             if tipo in {"insumo", "composicaoauxiliar", "item", "atividadeauxiliar"}:
@@ -185,10 +191,9 @@ def conciliar(base_raw, prop_raw):
 
     apenas_base = unido[unido["_merge"] == "left_only"].copy()
     apenas_prop = unido[unido["_merge"] == "right_only"].copy()
-    codigos_prop, codigos_base = set(prop["Codigo"]), set(base["Codigo"])
-    realocados = dados_lado(apenas_base[apenas_base["Codigo"].isin(codigos_prop)], "Base")
-    omitidos = dados_lado(apenas_base[~apenas_base["Codigo"].isin(codigos_prop)], "Base")
-    adicionados = dados_lado(apenas_prop[~apenas_prop["Codigo"].isin(codigos_base)], "Prop")
+    omitidos = dados_lado(apenas_base, "Base")
+    adicionados = dados_lado(apenas_prop, "Prop")
+    realocados = pd.DataFrame(columns=omitidos.columns)
     return auditado, omitidos, adicionados, realocados
 
 
