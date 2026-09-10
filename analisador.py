@@ -79,7 +79,7 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
     tipos = {"composicao", "composicaoauxiliar", "insumo", "item", "atividadeauxiliar"}
     # <<< ADIÇÃO 1
 
-    for indice, linha in bruto.iterrows():
+for indice, linha in bruto.iterrows():
         valores = [texto(valor) for valor in linha.tolist()]
         primeiro = valores[0] if valores else ""
         tipo = rotulo(primeiro)
@@ -88,6 +88,14 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
             cpu, descricao_cpu = None, ""
             mapa = localizar_colunas(valores, mapa)
             continue
+        
+        # A PARTIR DAQUI: ALINHE COM EXATAMENTE 8 ESPAÇOS
+        linha_texto = "".join(rotulo(v) for v in valores)
+        if "codigo" in linha_texto and "descricao" in linha_texto:
+            mapa = localizar_colunas(valores, mapa)
+            continue
+            
+        # O restante do bloco também deve seguir a mesma margem
       linha_texto = "".join(rotulo(v) for v in valores)
         if "codigo" in linha_texto and "descricao" in linha_texto:
             mapa = localizar_colunas(valores, mapa)
