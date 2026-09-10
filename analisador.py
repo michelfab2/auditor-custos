@@ -66,6 +66,11 @@ def localizar_colunas(linha, atuais):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
+    """
+    Parser melhorado:
+    - detecção robusta de linhas-cabeçalho do ORSE/Item
+    - evita sobrescrever CPU principal quando aparecem 'Composição' internas (tratadas como 'Composição auxiliar')
+    """
     if len(arquivo_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
         return None, pd.DataFrame(), f"{origem}: arquivo excede {MAX_FILE_SIZE_MB} MB."
     try:
@@ -77,30 +82,44 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
     itens, erros = [], []
     cpu, descricao_cpu, ordem = None, "", 0
     tipos = {"composicao", "composicaoauxiliar", "insumo", "item", "atividadeauxiliar"}
+    cpu_item_counts = {}  # conta quantos insumos/items já foram atribuídos a cada CPU
+
+    def is_header_row_improved(valores):
+        # regra 1: segunda coluna é 'código' (ORSE típico: Item | Código | Banco | Descrição ...)
+        if len(valores) > 1 and rotulo(valores[1]) == "codigo":
+            return True
+        # regra 2: a linha contém pelo menos dois tokens que combinam com nomes de coluna comuns
+        tokens = [rotulo(v) for v in valores if texto(v)]
+        keywords = {"codigo", "descricao", "quant", "qtd", "preco", "valorunit", "und", "unidade"}
+        hits = sum(1 for t in tokens if any(k in t for k in keywords))
+        return hits >= 2
 
     for indice, linha in bruto.iterrows():
         valores = [texto(valor) for valor in linha.tolist()]
         primeiro = valores[0] if valores else ""
         tipo = rotulo(primeiro)
 
+        # seção numerada tipo "1.2" — reinicia mapeamento de colunas
         if re.fullmatch(r"\d+\.\d+", primeiro):
             cpu, descricao_cpu = None, ""
             mapa = localizar_colunas(valores, mapa)
             continue
-        
-        linha_texto = "".join(rotulo(v) for v in valores)
-        if "codigo" in linha_texto and "descricao" in linha_texto:
+
+        # detecção de cabeçalho (melhorada)
+        if is_header_row_improved(valores) or ("descricao" in tipo and "quant" in "".join(rotulo(v) for v in valores)):
             mapa = localizar_colunas(valores, mapa)
             continue
-        
+
+        # cabeçalhos simples (A/B/F/G/H) que invertem colunas
         if len(tipo) == 1 and tipo in "abfgh":
             mapa = localizar_colunas(valores, mapa)
             continue
-        
+
+        # "Resumo" indica separador de CPUs em algumas propostas
         if tipo == "resumo":
             cpu, descricao_cpu = None, ""
             continue
-        
+
         if tipo not in tipos:
             continue
 
@@ -113,15 +132,20 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
         if not cod:
             erros.append({"Origem": origem, "Linha": indice + 1, "Tipo": tipo, "Erro": "Código vazio"})
             continue
-        
-        if tipo == "composicao":
-            if cpu is None:
-                cpu, descricao_cpu = cod, desc
-            else:
-                tipo = "composicaoauxiliar"
-        
+
+        # se aparecer 'composicao' enquanto já há uma CPU corrente que já possui insumos/items,
+        # trate essa linha como 'composicaoauxiliar' (não sobrescreve a CPU corrente).
+        if tipo == "composicao" and cpu is not None and cpu_item_counts.get(cpu, 0) > 0:
+            tipo_effective = "composicaoauxiliar"
+        else:
+            tipo_effective = tipo
+
+        if tipo_effective == "composicao":
+            cpu, descricao_cpu = cod, desc
+
+        # quando não há CPU corrente, trate insumo/composicaoauxiliar/item/etc como CPU autônoma
         if cpu is None:
-            if tipo in {"insumo", "composicaoauxiliar", "item", "atividadeauxiliar"}:
+            if tipo_effective in {"insumo", "composicaoauxiliar", "item", "atividadeauxiliar"}:
                 cpu, descricao_cpu = cod, desc
             else:
                 erros.append({"Origem": origem, "Linha": indice + 1, "Tipo": tipo, "Erro": "Subitem sem composição principal"})
@@ -133,9 +157,13 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
             "Codigo": cod, "Descricao": desc,
             "Tipo": {"composicao": "Composição", "composicaoauxiliar": "Composição auxiliar",
                      "insumo": "Insumo", "item": "Item",
-                     "atividadeauxiliar": "Composição auxiliar"}[tipo],
+                     "atividadeauxiliar": "Composição auxiliar"}[tipo_effective],
             "Und": codigo(campo("und")), "Qtd": numero(campo("qtd")), "Preco_Unitario": numero(campo("preco")),
         })
+
+        # atualiza contagem só para insumos/items (não contar linhas de 'composição' como insumos)
+        if tipo_effective not in {"composicao", "composicaoauxiliar"}:
+            cpu_item_counts[cpu] = cpu_item_counts.get(cpu, 0) + 1
 
     dados = pd.DataFrame(itens)
     log = pd.DataFrame(erros, columns=["Origem", "Linha", "Tipo", "Erro"])
