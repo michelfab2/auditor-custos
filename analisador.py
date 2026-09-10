@@ -90,7 +90,7 @@ for indice, linha in bruto.iterrows():
             continue
         
         # A PARTIR DAQUI: ALINHE COM EXATAMENTE 8 ESPAÇOS
-        linha_texto = "".join(rotulo(v) for v in valores)
+      linha_texto = "".join(rotulo(v) for v in valores)
         if "codigo" in linha_texto and "descricao" in linha_texto:
             mapa = localizar_colunas(valores, mapa)
             continue
