@@ -80,7 +80,7 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
 
     mapa = {"cod": 1, "desc": 3, "und": 6, "qtd": 7, "preco": 8}
     itens, erros = [], []
-    cpu, descricao_cpu, ordem = None, "", 0
+    cpu, descricao_cpu, ordem = None, "", 0     macro_cod, macro_desc = "0", "Geral"
     tipos = {"composicao", "composicaoauxiliar", "insumo", "item", "atividadeauxiliar"}
     cpu_item_counts = {}  # conta quantos insumos/items já foram atribuídos a cada CPU
 
@@ -99,8 +99,10 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
         primeiro = valores[0] if valores else ""
         tipo = rotulo(primeiro)
 
-        # seção numerada tipo "1.2" — reinicia mapeamento de colunas
-        if re.fullmatch(r"\d+\.\d+", primeiro):
+       # seção numerada tipo "1.2" — reinicia mapeamento de colunas e salva a Etapa
+       if re.match(r"^\d+(\.\d+)*$", str(primeiro).strip()):
+            macro_cod = str(primeiro).strip()
+            macro_desc = valores[1] if len(valores) > 1 else ""
             cpu, descricao_cpu = None, ""
             mapa = localizar_colunas(valores, mapa)
             continue
@@ -153,6 +155,7 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
 
         ordem += 1
         itens.append({
+            "EAP_Cod": macro_cod, "EAP_Desc": macro_desc, # Rastreador de Jogo de Cronograma
             "Ordem": ordem, "CPU": cpu, "Descricao_CPU": descricao_cpu,
             "Codigo": cod, "Descricao": desc,
             "Tipo": {"composicao": "Composição", "composicaoauxiliar": "Composição auxiliar",
@@ -196,6 +199,25 @@ def dados_lado(df, lado):
     colunas = {"Ordem": f"Ordem{sufixo}", "CPU": "CPU", "Descricao_CPU": f"Descricao_CPU{sufixo}", "Codigo": "Codigo", "Descricao": f"Descricao{sufixo}", "Tipo": f"Tipo{sufixo}", "Und": f"Und{sufixo}", "Qtd": f"Qtd{sufixo}", "Preco_Unitario": f"Preco_Unitario{sufixo}"}
     return pd.DataFrame({novo: df[velho] for novo, velho in colunas.items()}).dropna(subset=["Codigo"])
 
+def classificar_curva_abc(df, col_valor="Total_Base"):
+    if df.empty: 
+        return df
+    # Guarda a ordem original para não bagunçar a planilha
+    df["_index_temp"] = df.index
+    # Ordena do maior para o menor valor
+    df = df.sort_values(by=col_valor, ascending=False)
+    total_geral = df[col_valor].sum()
+    
+    if total_geral > 0:
+        df["Perc_Acumulado"] = df[col_valor].cumsum() / total_geral
+        df["Classe_ABC"] = np.where(df["Perc_Acumulado"] <= 0.80, "A",
+                           np.where(df["Perc_Acumulado"] <= 0.95, "B", "C"))
+    else:
+        df["Classe_ABC"] = "C"
+        
+    # Devolve para a ordem original e limpa colunas temporárias
+    df = df.sort_values(by="_index_temp").drop(columns=["_index_temp", "Perc_Acumulado"])
+    return df
 
 def conciliar(base_raw, prop_raw):
     base, prop = preparar_itens(base_raw), preparar_itens(prop_raw)
@@ -215,6 +237,9 @@ def conciliar(base_raw, prop_raw):
     auditado["Delta_Total"] = auditado["Total_Prop"] - auditado["Total_Base"]
     auditado["Var_Preco_%"] = np.where(auditado["Preco_Base"] != 0, auditado["Preco_Prop"] / auditado["Preco_Base"] - 1, 0.0)
     auditado["Var_Total_%"] = np.where(auditado["Total_Base"] != 0, auditado["Total_Prop"] / auditado["Total_Base"] - 1, 0.0)
+
+    # ---> ADICIONE ESTA LINHA AQUI <---
+    auditado = classificar_curva_abc(auditado)
 
     apenas_base = unido[unido["_merge"] == "left_only"].copy()
     apenas_prop = unido[unido["_merge"] == "right_only"].copy()
@@ -510,8 +535,9 @@ def main():
         st.divider()
         esquerda, direita = st.columns(2)
         with esquerda:
-            st.markdown("##### 🔺 Top 5 impactos de sobrepreço")
-            top_sobre = auditado[auditado["Delta_Total"] > 0].nlargest(5, "Delta_Total")[["Codigo", "Descricao", "Delta_Total", "Var_Total_%"]]
+            st.markdown("##### 🔺 Top 5 Sobrepreços (Itens Curva A)")
+            # Filtra apenas itens da Curva A que estão com sobrepreço
+            top_sobre = auditado[(auditado["Delta_Total"] > 0) & (auditado["Classe_ABC"] == "A")].nlargest(5, "Delta_Total")[["Codigo", "Descricao", "Delta_Total", "Var_Total_%"]]
             if top_sobre.empty:
                 st.success("Nenhum sobrepreço mapeado.")
             else:
@@ -523,6 +549,23 @@ def main():
                 st.info("Nenhuma anomalia de desconto extremo encontrada.")
             else:
                 st.dataframe(top_inex.style.format({"Delta_Total": "R$ {:.2f}", "Var_Total_%": "{:.2%}"}), hide_index=True, use_container_width=True)
+        
+        # --- INÍCIO DO NOVO BLOCO (JOGO DE CRONOGRAMA) ---
+        st.divider()
+        st.markdown("##### ⏳ Risco de Jogo de Cronograma (Análise por Etapa)")
+        st.caption("Verifique se as etapas iniciais (ex: Infraestrutura) possuem desconto muito inferior às etapas finais. Isso indica risco de abandono de obra.")
+        
+        # Agrupa os valores da base e proposta por macro etapa
+        resumo_eap = auditado.groupby("EAP_Cod")[["Total_Base", "Total_Prop"]].sum().reset_index()
+        # Calcula o desconto (ou sobrepreço) percentual de cada etapa
+        resumo_eap["Variação (%)"] = np.where(resumo_eap["Total_Base"] > 0, 
+                                             (resumo_eap["Total_Prop"] / resumo_eap["Total_Base"]) - 1, 0.0)
+        
+        # Formata para exibição
+        resumo_eap = resumo_eap.set_index("EAP_Cod")
+        st.bar_chart(resumo_eap["Variação (%)"], height=300)
+        # --- FIM DO NOVO BLOCO ---
+
         st.divider()
         st.download_button("📥 Baixar Laudo de Auditoria (.XLSX)", excel, "Laudo_Auditoria_PRO_Consolidado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with tabs[1]: st.dataframe(matriz.style.format(formato, na_rep="").apply(estilizar, axis=1), height=600, use_container_width=True)
