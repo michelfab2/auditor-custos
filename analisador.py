@@ -80,7 +80,8 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
 
     mapa = {"cod": 1, "desc": 3, "und": 6, "qtd": 7, "preco": 8}
     itens, erros = [], []
-    cpu, descricao_cpu, ordem = None, "", 0     macro_cod, macro_desc = "0", "Geral"
+    cpu, descricao_cpu, ordem = None, "", 0
+    macro_cod, macro_desc = "0", "Geral"
     tipos = {"composicao", "composicaoauxiliar", "insumo", "item", "atividadeauxiliar"}
     cpu_item_counts = {}  # conta quantos insumos/items já foram atribuídos a cada CPU
 
