@@ -226,6 +226,7 @@ def conciliar(base_raw, prop_raw):
     auditado = unido[unido["_merge"] == "both"].copy().rename(columns={
         "Descricao_CPU_Base": "Descricao_CPU", "Descricao_Base": "Descricao", "Ordem_Base": "Ordem",
         "Preco_Unitario_Base": "Preco_Base", "Preco_Unitario_Prop": "Preco_Prop",
+        "EAP_Cod_Base": "EAP_Cod",
     })
     for coluna in ["Qtd_Base", "Qtd_Prop", "Preco_Base", "Preco_Prop"]:
         auditado[coluna] = auditado[coluna].fillna(0.0)
