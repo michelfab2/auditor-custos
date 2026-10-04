@@ -101,7 +101,7 @@ def ler_orcafascio(arquivo_bytes, origem, higienizar=True):
         tipo = rotulo(primeiro)
 
        # seção numerada tipo "1.2" — reinicia mapeamento de colunas e salva a Etapa
-       if re.match(r"^\d+(\.\d+)*$", str(primeiro).strip()):
+        if re.match(r"^\d+(\.\d+)*$", str(primeiro).strip()):
             macro_cod = str(primeiro).strip()
             macro_desc = valores[1] if len(valores) > 1 else ""
             cpu, descricao_cpu = None, ""
